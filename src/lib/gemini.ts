@@ -35,12 +35,15 @@ const BATCH_SIZE = 12;
 const MAX_CONCURRENT_BATCHES = 2;
 
 export function getGeminiApiKey(): string | null {
-  return (
+  const raw =
     process.env.GEMINI_API_KEY ||
+    process.env.GOOGLE_API_KEY ||
     process.env.GOOGLE_GENERATIVE_AI_API_KEY ||
     process.env.NEXT_PUBLIC_GEMINI_API_KEY ||
-    null
-  );
+    null;
+  if (!raw) return null;
+  const trimmed = raw.trim().replace(/^["']|["']$/g, '');
+  return trimmed || null;
 }
 
 export function isGeminiConfigured(): boolean {
@@ -48,11 +51,13 @@ export function isGeminiConfigured(): boolean {
 }
 
 export function getGroqApiKey(): string | null {
-  return (
+  const raw =
     process.env.GROQ_API_KEY ||
     process.env.NEXT_PUBLIC_GROQ_API_KEY ||
-    null
-  );
+    null;
+  if (!raw) return null;
+  const trimmed = raw.trim().replace(/^["']|["']$/g, '');
+  return trimmed || null;
 }
 
 interface CallAiParams {

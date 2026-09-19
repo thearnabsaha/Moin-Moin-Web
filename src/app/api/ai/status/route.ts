@@ -1,24 +1,8 @@
 import { NextResponse } from 'next/server';
 import { getCurrentUserId } from '@/lib/get-user';
+import { getGeminiApiKey, getGroqApiKey } from '@/lib/gemini';
 
 const GEMINI_API_URL = 'https://generativelanguage.googleapis.com/v1beta/models';
-
-function getGeminiApiKey(): string | null {
-  return (
-    process.env.GEMINI_API_KEY ||
-    process.env.GOOGLE_GENERATIVE_AI_API_KEY ||
-    process.env.NEXT_PUBLIC_GEMINI_API_KEY ||
-    null
-  );
-}
-
-function getGroqApiKey(): string | null {
-  return (
-    process.env.GROQ_API_KEY ||
-    process.env.NEXT_PUBLIC_GROQ_API_KEY ||
-    null
-  );
-}
 
 interface AiServiceStatus {
   name: string;
