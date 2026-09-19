@@ -2,102 +2,135 @@ import { NextRequest, NextResponse } from 'next/server';
 import { eq } from 'drizzle-orm';
 import { db } from '@/lib/db';
 import { userWords, wordBatches } from '@/lib/schema';
-import { enrichWords } from '@/lib/groq';
+import { enrichWordsWithGemini } from '@/lib/gemini';
 import { getCurrentUserId } from '@/lib/get-user';
+import { parseAndCleanWords, normalizeWord } from '@/lib/word-parser';
 
-// Vercel Hobby plan caps at 60s; Pro allows up to 300s.
-// Adjust if on a paid plan and large uploads need more time.
 export const maxDuration = 60;
-
-function parseWords(wordsString: string): string[] {
-  const lines = wordsString.split(/\n+/).map((l) => l.trim()).filter(Boolean);
-
-  const entries: string[] = [];
-  for (const line of lines) {
-    const segments = line.split(/,/).map((s) => s.trim()).filter(Boolean);
-    for (const seg of segments) {
-      entries.push(seg);
-    }
-  }
-
-  return Array.from(new Set(entries));
-}
-
-function normalizeForComparison(word: string): string {
-  return word.toLowerCase().replace(/^(der|die|das|ein|eine|einen|einem|einer|eines)\s+/i, '').trim();
-}
 
 export async function POST(request: NextRequest) {
   try {
     const userId = await getCurrentUserId();
     const body = await request.json();
     const { words: wordsInput } = body;
-    if (typeof wordsInput !== 'string') {
-      return NextResponse.json({ success: false, error: 'words must be a string' }, { status: 400 });
-    }
-    const parsedWords = parseWords(wordsInput);
-    if (parsedWords.length === 0) {
-      return NextResponse.json({ success: false, error: 'No valid words provided' }, { status: 400 });
+    if (typeof wordsInput !== 'string' || !wordsInput.trim()) {
+      return NextResponse.json({ success: false, error: 'words must be a non-empty string' }, { status: 400 });
     }
 
-    const existingRows = await db.select({ word: userWords.word })
+    const parsedWords = parseAndCleanWords(wordsInput);
+    if (parsedWords.length === 0) {
+      return NextResponse.json({ success: false, error: 'No valid German words provided' }, { status: 400 });
+    }
+
+    const existingRows = await db
+      .select()
       .from(userWords)
       .where(eq(userWords.userId, userId));
-    const existingNormalized = new Set(existingRows.map((r) => normalizeForComparison(r.word)));
 
-    const newWords = parsedWords.filter((w) => !existingNormalized.has(normalizeForComparison(w)));
-    const skippedCount = parsedWords.length - newWords.length;
-
-    if (newWords.length === 0) {
-      return NextResponse.json({
-        success: false,
-        error: `All ${parsedWords.length} word(s) already exist in your vocabulary.`,
-        skipped: skippedCount,
-      }, { status: 400 });
+    const existingByRoot = new Map<string, typeof existingRows[0]>();
+    for (const row of existingRows) {
+      const root = normalizeWord(row.word);
+      if (!existingByRoot.has(root) && row.meaning && normalizeWord(row.meaning) !== root) {
+        existingByRoot.set(root, row);
+      }
     }
 
-    let enrichedWords;
-    try {
-      enrichedWords = await enrichWords(newWords);
-    } catch (enrichErr) {
-      console.error('Enrichment failed:', enrichErr);
-      const msg = enrichErr instanceof Error ? enrichErr.message : 'Unknown enrichment error';
-      return NextResponse.json({ success: false, error: `Enrichment failed: ${msg}` }, { status: 500 });
-    }
-    if (enrichedWords.length === 0) {
-      return NextResponse.json({ success: false, error: 'AI could not process the words. Please try again.' }, { status: 400 });
+    const wordsToEnrich: string[] = [];
+    const reusedData: typeof existingRows = [];
+
+    for (const w of parsedWords) {
+      const root = normalizeWord(w);
+      const existing = existingByRoot.get(root);
+      if (existing) {
+        reusedData.push(existing);
+      } else {
+        wordsToEnrich.push(w);
+      }
     }
 
-    const deduped = enrichedWords.filter((w) => !existingNormalized.has(normalizeForComparison(w.word)));
-    if (deduped.length === 0) {
-      return NextResponse.json({
-        success: false,
-        error: 'All words already exist in your vocabulary.',
-        skipped: enrichedWords.length,
-      }, { status: 400 });
+    let newlyEnriched: Awaited<ReturnType<typeof enrichWordsWithGemini>> = [];
+    if (wordsToEnrich.length > 0) {
+      try {
+        newlyEnriched = await enrichWordsWithGemini(wordsToEnrich);
+      } catch (enrichErr) {
+        console.error('Enrichment failed:', enrichErr);
+        const msg = enrichErr instanceof Error ? enrichErr.message : 'Unknown enrichment error';
+        return NextResponse.json({ success: false, error: `Enrichment failed: ${msg}` }, { status: 500 });
+      }
+    }
+
+    const seenRoots = new Set<string>();
+    const allItems: Array<{
+      word: string;
+      partOfSpeech: string;
+      gender: string | null;
+      pluralForm: string | null;
+      conjugation: Record<string, string> | null;
+      meaning: string;
+      cefrLevel: string;
+      exampleSentence: string | null;
+      verbType: string | null;
+      auxiliaryType: string | null;
+      presentForm: string | null;
+      simplePast: string | null;
+      perfectForm: string | null;
+    }> = [];
+
+    for (const r of reusedData) {
+      const root = normalizeWord(r.word);
+      if (seenRoots.has(root)) continue;
+      seenRoots.add(root);
+      allItems.push({
+        word: r.word,
+        partOfSpeech: r.partOfSpeech,
+        gender: r.partOfSpeech.toLowerCase() === 'noun' ? r.gender : null,
+        pluralForm: r.pluralForm,
+        conjugation: r.conjugation as Record<string, string> | null,
+        meaning: r.meaning,
+        cefrLevel: r.cefrLevel,
+        exampleSentence: r.exampleSentence,
+        verbType: r.verbType,
+        auxiliaryType: r.auxiliaryType,
+        presentForm: r.presentForm,
+        simplePast: r.simplePast,
+        perfectForm: r.perfectForm,
+      });
+    }
+
+    for (const w of newlyEnriched) {
+      const root = normalizeWord(w.word);
+      if (seenRoots.has(root)) continue;
+      seenRoots.add(root);
+      allItems.push({
+        word: w.word,
+        partOfSpeech: w.part_of_speech,
+        gender: w.part_of_speech.toLowerCase() === 'noun' ? (w.gender ?? null) : null,
+        pluralForm: w.plural_form ?? null,
+        conjugation: (w.conjugation as Record<string, string> | null) ?? null,
+        meaning: w.meaning,
+        cefrLevel: w.cefr_level ?? 'A1',
+        exampleSentence: w.example_sentence ?? null,
+        verbType: w.verb_type ?? null,
+        auxiliaryType: w.auxiliary_type ?? null,
+        presentForm: w.present_form ?? null,
+        simplePast: w.simple_past ?? null,
+        perfectForm: w.perfect_form ?? null,
+      });
+    }
+
+    if (allItems.length === 0) {
+      return NextResponse.json({ success: false, error: 'No words to add' }, { status: 400 });
     }
 
     const [batch] = await db.insert(wordBatches).values({
       userId,
       name: `Batch ${new Date().toLocaleDateString('de-DE')}`,
-      wordCount: deduped.length,
+      wordCount: allItems.length,
     }).returning();
 
-    const insertRows = deduped.map((w) => ({
+    const insertRows = allItems.map((item) => ({
       userId,
-      word: w.word,
-      partOfSpeech: w.part_of_speech,
-      gender: w.gender,
-      pluralForm: w.plural_form,
-      conjugation: w.conjugation as Record<string, string> | null,
-      meaning: w.meaning,
-      cefrLevel: w.cefr_level,
-      exampleSentence: w.example_sentence,
-      verbType: w.verb_type ?? null,
-      auxiliaryType: w.auxiliary_type ?? null,
-      presentForm: w.present_form ?? null,
-      simplePast: w.simple_past ?? null,
-      perfectForm: w.perfect_form ?? null,
+      ...item,
       batchId: batch.id,
     }));
 
@@ -105,11 +138,12 @@ export async function POST(request: NextRequest) {
     for (let i = 0; i < insertRows.length; i += DB_INSERT_BATCH) {
       await db.insert(userWords).values(insertRows.slice(i, i + DB_INSERT_BATCH));
     }
+
     return NextResponse.json({
       success: true,
-      count: deduped.length,
-      skipped: skippedCount + (enrichedWords.length - deduped.length),
-      words: deduped,
+      count: allItems.length,
+      skipped: 0,
+      words: allItems,
     });
   } catch (error) {
     if (error instanceof Error && error.message === 'Not authenticated') {

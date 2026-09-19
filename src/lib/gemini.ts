@@ -7,6 +7,7 @@ import {
   type EnrichedExpression,
 } from './validations';
 import { lookupWord } from './dictionary-data';
+import { normalizeWord } from './word-parser';
 
 /**
  * Gemini model cascade ordered by speed, cost-effectiveness, and reliability.
@@ -145,18 +146,31 @@ export async function callGemini(params: CallGeminiParams): Promise<string> {
 
 // ── WORD ENRICHMENT PROMPT & LOGIC ─────────────────────────────
 
-const ENRICH_WORD_SYSTEM_PROMPT = `You are a German language lexicography expert. For each German word or phrase provided, return structured linguistic data in valid JSON.
+const ENRICH_WORD_SYSTEM_PROMPT = `You are a German language lexicography and orthography expert. For each German word or phrase provided, return structured linguistic data in valid JSON.
 
-CRITICAL RULES for interpreting input:
-- The "meaning" field MUST ALWAYS be an accurate ENGLISH translation. NEVER return the German word itself as the meaning! (e.g. "geben" -> "to give", NOT "geben"; "gratulieren" -> "to congratulate", NOT "gratulieren"; "gefallen" -> "to please, to like", NOT "gefallen"; "gehören" -> "to belong to", NOT "gehören").
-- ONLY nouns have a gender ("masculine" | "feminine" | "neuter"). For all verbs, adjectives, adverbs, prepositions, conjunctions, and other parts of speech, "gender" MUST BE null. NEVER assign a gender to a verb! (e.g. "versprechen" is a verb, so its gender MUST be null).
-- If the user writes an article + noun (e.g. "die Frau", "der Hund", "das Kind"), treat it as ONE noun entry. The article indicates the gender. The "word" field should be the noun with its article (e.g. "die Frau").
-- If the user writes a BARE noun WITHOUT an article (e.g. "Frau", "Hund", "Kind", "Tisch"), you MUST still return the word field WITH its correct definite article prepended (e.g. "Frau" → word: "die Frau", "Hund" → word: "der Hund", "Kind" → word: "das Kind"). Always add the correct article for nouns.
-- If the user writes a reflexive verb (e.g. "sich freuen", "sich setzen"), treat it as ONE verb entry.
-- Multi-word expressions (e.g. "auf Wiedersehen", "zum Beispiel", "Guten Morgen") should be treated as ONE entry.
-- Separable prefix verbs (e.g. "aufstehen", "ankommen") are single verbs.
-- "example_sentence" must be an authentic, natural German sentence showing real everyday usage. NEVER output generic placeholders like "Wir [word] zusammen" or "Das ist sehr [word]".
-- Return exactly one entry per numbered input item provided by the user.
+CRITICAL RULES:
+1. SPELLING & ORTHOGRAPHY CORRECTION:
+- Input words may have typos, phonetic spelling, missing or incorrect umlauts (ä, ö, ü, ß), wrong capitalization, or missing articles (e.g. "apfel", "fruhstuck", "gehn", "schon", "artzt", "madchen", "gross", "tisch").
+- You MUST CORRECT every word to its proper standard High German (Hochdeutsch) orthography!
+- NOUNS: German nouns MUST ALWAYS begin with a capital letter and MUST have their correct definite article ("der", "die", or "das") prepended (e.g. "apfel" → "der Apfel", "buch" → "das Buch", "frau" → "die Frau", "tisch" → "der Tisch"). Even if the user provided a bare noun, ALWAYS include the correct definite article.
+- VERBS: Must be in standard lowercase infinitive form (e.g. "gehn" → "gehen", "fahrem" → "fahren").
+- ADJECTIVES / ADVERBS: Must be in standard lowercase with correct umlauts (e.g. "schon" → "schön", "heflich" → "höflich").
+
+2. ACCURATE ENGLISH MEANINGS (NEVER GERMAN):
+- The "meaning" field MUST ALWAYS be an accurate ENGLISH translation.
+- NEVER return the German word itself as the meaning! (e.g. "geben" -> "to give", NOT "geben"; "gratulieren" -> "to congratulate", NOT "gratulieren"; "gefallen" -> "to please, to like", NOT "gefallen"; "gehören" -> "to belong to", NOT "gehören").
+
+3. GENDER RULES:
+- ONLY nouns have a gender ("masculine" | "feminine" | "neuter").
+- For all verbs, adjectives, adverbs, prepositions, conjunctions, and other parts of speech, "gender" MUST BE null. NEVER assign a gender to a verb! (e.g. "versprechen" is a verb, so its gender MUST be null).
+
+4. REALISTIC EXAMPLES:
+- "example_sentence" must be an authentic, natural German sentence showing real everyday usage.
+- NEVER output generic placeholders like "Wir [word] zusammen" or "Das ist sehr [word]".
+
+5. 1-TO-1 OUTPUT GUARANTEE (NO DROPPED WORDS):
+- You MUST return EXACTLY one entry in the "words" array for EVERY numbered input item provided by the user, in the exact same order.
+- NEVER merge, skip, or omit ANY word from the input list!
 
 Output JSON format:
 {
@@ -185,12 +199,7 @@ export function fallbackEnrichWord(rawWord: string): EnrichedWord {
   const dictEntry = lookupWord(cleanWord);
 
   if (dictEntry) {
-    let word = trimmed;
-    if (dictEntry.partOfSpeech === 'noun' && !/^(der|die|das)\s+/i.test(trimmed)) {
-      const art = dictEntry.gender === 'feminine' ? 'die' : dictEntry.gender === 'neuter' ? 'das' : 'der';
-      const capitalized = cleanWord.charAt(0).toUpperCase() + cleanWord.slice(1);
-      word = `${art} ${capitalized}`;
-    }
+    const word = dictEntry.canonicalWord || trimmed;
     return {
       word,
       part_of_speech: dictEntry.partOfSpeech,
@@ -198,7 +207,7 @@ export function fallbackEnrichWord(rawWord: string): EnrichedWord {
       plural_form: dictEntry.pluralForm ?? null,
       meaning: dictEntry.meaning,
       cefr_level: dictEntry.cefrLevel ?? 'A1',
-      example_sentence: dictEntry.exampleSentence ?? `Ich verwende das Wort "${word}".`,
+      example_sentence: dictEntry.exampleSentence ?? `Ich lerne das Wort "${word}".`,
       verb_type: dictEntry.verbType ?? null,
       auxiliary_type: dictEntry.auxiliaryType ?? null,
       present_form: null,
@@ -331,6 +340,19 @@ function sanitizeEnrichedItem(item: Record<string, unknown>): void {
       item.example_sentence = dict.exampleSentence;
     }
   }
+
+  // 4. Ensure spelling correction and noun articles from dictionary canonical forms
+  const dictMatch = lookupWord(cleanWord);
+  if (dictMatch?.canonicalWord) {
+    if (pos === 'noun' || dictMatch.partOfSpeech === 'noun') {
+      item.word = dictMatch.canonicalWord;
+      item.part_of_speech = 'noun';
+      if (dictMatch.gender) item.gender = dictMatch.gender;
+      if (dictMatch.pluralForm && !item.plural_form) item.plural_form = dictMatch.pluralForm;
+    } else if (pos === 'verb' && dictMatch.partOfSpeech === 'verb') {
+      item.word = dictMatch.canonicalWord;
+    }
+  }
 }
 
 function parseEnrichWordResponse(raw: string | null | undefined): EnrichedWord[] {
@@ -377,10 +399,46 @@ function parseEnrichWordResponse(raw: string | null | undefined): EnrichedWord[]
   }
 }
 
+function reconcileWordBatch(words: string[], parsed: EnrichedWord[]): EnrichedWord[] {
+  if (parsed.length === words.length) {
+    return parsed;
+  }
+
+  const result: EnrichedWord[] = [];
+  const usedIndices = new Set<number>();
+
+  for (let i = 0; i < words.length; i++) {
+    const rawWord = words[i];
+    const root = normalizeWord(rawWord);
+
+    // Try finding matching item by root
+    let matchIdx = parsed.findIndex((p, idx) => {
+      if (usedIndices.has(idx)) return false;
+      const pRoot = normalizeWord(p.word);
+      return pRoot === root || pRoot.includes(root) || root.includes(pRoot);
+    });
+
+    // If no root match and position i is unused and exists, match by position
+    if (matchIdx === -1 && i < parsed.length && !usedIndices.has(i)) {
+      matchIdx = i;
+    }
+
+    if (matchIdx !== -1) {
+      usedIndices.add(matchIdx);
+      result.push(parsed[matchIdx]);
+    } else {
+      console.warn(`[Gemini:reconcileWordBatch] Word "${rawWord}" was missing from AI output, applying dictionary/fallback`);
+      result.push(fallbackEnrichWord(rawWord));
+    }
+  }
+
+  return result;
+}
+
 async function enrichWordBatch(words: string[]): Promise<EnrichedWord[]> {
   try {
     const listPrompt = words.map((w, i) => `${i + 1}. ${w}`).join('\n');
-    const prompt = `Provide linguistic data for each of these German words/phrases (one entry per item):\n${listPrompt}`;
+    const prompt = `Provide linguistic data with spelling corrections for each of these German words/phrases (return exactly ${words.length} items, one per numbered entry in the same order):\n${listPrompt}`;
 
     const rawResponse = await callGemini({
       systemInstruction: ENRICH_WORD_SYSTEM_PROMPT,
@@ -391,7 +449,7 @@ async function enrichWordBatch(words: string[]): Promise<EnrichedWord[]> {
 
     const parsed = parseEnrichWordResponse(rawResponse);
     if (parsed.length > 0) {
-      return parsed;
+      return reconcileWordBatch(words, parsed);
     }
   } catch (err) {
     console.warn('[Gemini:enrichWordBatch] Call failed, using local fallback:', err);

@@ -1,28 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/lib/db';
 import { wordBatches, userWords } from '@/lib/schema';
-import { eq, desc, and, sql } from 'drizzle-orm';
+import { eq, desc } from 'drizzle-orm';
 import { getSession } from '@/lib/auth';
-import { enrichWords } from '@/lib/groq';
+import { enrichWordsWithGemini } from '@/lib/gemini';
+import { parseAndCleanWords, normalizeWord } from '@/lib/word-parser';
 
 export const maxDuration = 60;
-
-function parseWords(wordsString: string): string[] {
-  const lines = wordsString.split(/\n+/).map((l) => l.trim()).filter(Boolean);
-  const entries: string[] = [];
-  for (const line of lines) {
-    const segments = line.split(/[,;]+/).map((s) => s.trim()).filter(Boolean);
-    for (const seg of segments) {
-      if (seg.length > 0) entries.push(seg);
-    }
-  }
-  // Deduplicate internal array preserving order
-  return Array.from(new Set(entries));
-}
-
-function normalizeForComparison(word: string): string {
-  return word.toLowerCase().replace(/^(der|die|das|ein|eine|einen|einem|einer|eines)\s+/i, '').trim();
-}
 
 // GET /api/vocabulary/sets - List all word sets for user
 export async function GET() {
@@ -92,87 +76,133 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Please enter at least one German word' }, { status: 400 });
     }
 
-    const parsedWords = parseWords(wordsInput);
+    // Clean input and deduplicate ("repeated words shouldn't come")
+    const parsedWords = parseAndCleanWords(wordsInput);
     if (parsedWords.length === 0) {
-      return NextResponse.json({ error: 'No valid words parsed from input' }, { status: 400 });
+      return NextResponse.json({ error: 'No valid German words parsed from input' }, { status: 400 });
     }
 
-    // 1. Fetch user's existing vocabulary to skip duplicates
+    // Check existing vocabulary so we can reuse high-quality data without dropping words
     const existingRows = await db
-      .select({ word: userWords.word })
+      .select()
       .from(userWords)
       .where(eq(userWords.userId, session.id));
 
-    const existingNormalized = new Set(existingRows.map((r) => normalizeForComparison(r.word)));
-
-    // 2. Filter out already-existing words
-    const newWords = parsedWords.filter((w) => !existingNormalized.has(normalizeForComparison(w)));
-    const skippedCount = parsedWords.length - newWords.length;
-
-    if (newWords.length === 0) {
-      return NextResponse.json(
-        {
-          error: `All ${parsedWords.length} word(s) already exist in your vocabulary.`,
-          skipped: skippedCount,
-        },
-        { status: 400 }
-      );
+    const existingByRoot = new Map<string, typeof existingRows[0]>();
+    for (const row of existingRows) {
+      const root = normalizeWord(row.word);
+      if (!existingByRoot.has(root) && row.meaning && normalizeWord(row.meaning) !== root) {
+        existingByRoot.set(root, row);
+      }
     }
 
-    // 3. AI Enrichment with Groq
-    let enrichedWords;
-    try {
-      enrichedWords = await enrichWords(newWords);
-    } catch (enrichErr) {
-      console.error('Enrichment failed:', enrichErr);
-      const msg = enrichErr instanceof Error ? enrichErr.message : 'Unknown error';
-      return NextResponse.json({ error: `Enrichment failed: ${msg}` }, { status: 500 });
+    const wordsToEnrich: string[] = [];
+    const reusedData: typeof existingRows = [];
+
+    for (const w of parsedWords) {
+      const root = normalizeWord(w);
+      const existing = existingByRoot.get(root);
+      if (existing) {
+        reusedData.push(existing);
+      } else {
+        wordsToEnrich.push(w);
+      }
     }
 
-    if (!enrichedWords || enrichedWords.length === 0) {
-      return NextResponse.json({ error: 'Failed to enrich words. Please try again.' }, { status: 400 });
+    let newlyEnriched: Awaited<ReturnType<typeof enrichWordsWithGemini>> = [];
+    if (wordsToEnrich.length > 0) {
+      try {
+        newlyEnriched = await enrichWordsWithGemini(wordsToEnrich);
+      } catch (enrichErr) {
+        console.error('Enrichment failed:', enrichErr);
+        const msg = enrichErr instanceof Error ? enrichErr.message : 'Unknown error';
+        return NextResponse.json({ error: `Enrichment failed: ${msg}` }, { status: 500 });
+      }
     }
 
-    // 4. Final duplicate guard after enrichment
-    const deduped = enrichedWords.filter((w) => !existingNormalized.has(normalizeForComparison(w.word)));
-    if (deduped.length === 0) {
-      return NextResponse.json(
-        { error: 'All words already exist in your vocabulary.', skipped: parsedWords.length },
-        { status: 400 }
-      );
+    // Combine all words ensuring unique roots in the new set
+    const seenRootsInSet = new Set<string>();
+    const allSetItems: Array<{
+      word: string;
+      partOfSpeech: string;
+      gender: string | null;
+      pluralForm: string | null;
+      conjugation: Record<string, string> | null;
+      meaning: string;
+      cefrLevel: string;
+      exampleSentence: string | null;
+      verbType: string | null;
+      auxiliaryType: string | null;
+      presentForm: string | null;
+      simplePast: string | null;
+      perfectForm: string | null;
+    }> = [];
+
+    for (const r of reusedData) {
+      const root = normalizeWord(r.word);
+      if (seenRootsInSet.has(root)) continue;
+      seenRootsInSet.add(root);
+      allSetItems.push({
+        word: r.word,
+        partOfSpeech: r.partOfSpeech,
+        gender: r.partOfSpeech.toLowerCase() === 'noun' ? r.gender : null,
+        pluralForm: r.pluralForm,
+        conjugation: r.conjugation as Record<string, string> | null,
+        meaning: r.meaning,
+        cefrLevel: r.cefrLevel,
+        exampleSentence: r.exampleSentence,
+        verbType: r.verbType,
+        auxiliaryType: r.auxiliaryType,
+        presentForm: r.presentForm,
+        simplePast: r.simplePast,
+        perfectForm: r.perfectForm,
+      });
     }
 
-    // 5. Create Word Batch / Set
+    for (const w of newlyEnriched) {
+      const root = normalizeWord(w.word);
+      if (seenRootsInSet.has(root)) continue;
+      seenRootsInSet.add(root);
+      allSetItems.push({
+        word: w.word,
+        partOfSpeech: w.part_of_speech,
+        gender: w.part_of_speech.toLowerCase() === 'noun' ? (w.gender ?? null) : null,
+        pluralForm: w.plural_form ?? null,
+        conjugation: (w.conjugation as Record<string, string> | null) ?? null,
+        meaning: w.meaning,
+        cefrLevel: w.cefr_level ?? 'A1',
+        exampleSentence: w.example_sentence ?? null,
+        verbType: w.verb_type ?? null,
+        auxiliaryType: w.auxiliary_type ?? null,
+        presentForm: w.present_form ?? null,
+        simplePast: w.simple_past ?? null,
+        perfectForm: w.perfect_form ?? null,
+      });
+    }
+
+    if (allSetItems.length === 0) {
+      return NextResponse.json({ error: 'No valid words to create set' }, { status: 400 });
+    }
+
+    // Create Word Batch / Set
     const [batch] = await db
       .insert(wordBatches)
       .values({
         userId: session.id,
         name: setName,
-        wordCount: deduped.length,
+        wordCount: allSetItems.length,
         learnedCount: 0,
       })
       .returning();
 
-    // 6. Insert all enriched words into userWords linked to this batchId
+    // Insert all words linked to this batchId
     const createdWords = [];
-    for (const w of deduped) {
+    for (const item of allSetItems) {
       const [inserted] = await db
         .insert(userWords)
         .values({
           userId: session.id,
-          word: w.word,
-          partOfSpeech: w.part_of_speech,
-          gender: w.gender ?? null,
-          pluralForm: w.plural_form ?? null,
-          conjugation: (w.conjugation as Record<string, string> | null) ?? null,
-          meaning: w.meaning,
-          cefrLevel: w.cefr_level ?? 'A1',
-          exampleSentence: w.example_sentence ?? null,
-          verbType: w.verb_type ?? null,
-          auxiliaryType: w.auxiliary_type ?? null,
-          presentForm: w.present_form ?? null,
-          simplePast: w.simple_past ?? null,
-          perfectForm: w.perfect_form ?? null,
+          ...item,
           batchId: batch.id,
           learned: false,
         })
@@ -186,8 +216,8 @@ export async function POST(request: NextRequest) {
         ...batch,
         words: createdWords,
       },
-      addedCount: deduped.length,
-      skippedCount: parsedWords.length - deduped.length,
+      addedCount: createdWords.length,
+      skippedCount: 0,
     });
   } catch (error) {
     console.error('Error creating word set:', error);

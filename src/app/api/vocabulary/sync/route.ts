@@ -5,15 +5,9 @@ import { eq, and, inArray, InferSelectModel } from 'drizzle-orm';
 import { getSession } from '@/lib/auth';
 import { enrichWordsWithGemini } from '@/lib/gemini';
 import { lookupWord } from '@/lib/dictionary-data';
+import { normalizeWord } from '@/lib/word-parser';
 
 type UserWordRow = InferSelectModel<typeof userWords>;
-
-function normalizeForComparison(word: string): string {
-  return word
-    .toLowerCase()
-    .replace(/^(der|die|das|ein|eine|einen|einem|einer|eines)\s+/i, '')
-    .trim();
-}
 
 // POST /api/vocabulary/sync - Synchronize and deduplicate vocabulary & word sets
 export async function POST() {
@@ -28,11 +22,12 @@ export async function POST() {
       .from(userWords)
       .where(eq(userWords.userId, session.id));
 
-    // Group words by normalized root form
+    // Group words by batch and normalized root so repeated words within a set or unbatched words are merged
     const groups = new Map<string, UserWordRow[]>();
     for (const w of allWords) {
-      const key = normalizeForComparison(w.word);
-      if (!key) continue;
+      const root = normalizeWord(w.word);
+      if (!root) continue;
+      const key = `${w.batchId || 'orphan'}:${root}`;
       const list = groups.get(key) || [];
       list.push(w);
       groups.set(key, list);
@@ -111,7 +106,7 @@ export async function POST() {
     for (const w of allWords) {
       if (removedIds.includes(w.id)) continue;
 
-      const cleanWord = normalizeForComparison(w.word);
+      const cleanWord = normalizeWord(w.word);
       const rawWord = w.word.trim().toLowerCase();
       const rawMeaning = (w.meaning || '').trim().toLowerCase();
 

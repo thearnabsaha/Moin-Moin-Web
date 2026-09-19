@@ -4,6 +4,7 @@
  */
 
 export interface DictionaryEntry {
+  canonicalWord?: string;
   meaning: string;
   partOfSpeech: 'noun' | 'verb' | 'adjective' | 'adverb' | 'preposition' | 'conjunction' | 'pronoun' | 'article' | 'other';
   gender?: 'masculine' | 'feminine' | 'neuter' | null;
@@ -175,16 +176,117 @@ export const COMMON_GERMAN_DICTIONARY: Record<string, DictionaryEntry> = {
   'einschlafen': { meaning: 'to fall asleep', partOfSpeech: 'verb', gender: null, cefrLevel: 'A1', exampleSentence: 'Er schläft immer sehr schnell ein.', verbType: 'irregular', auxiliaryType: 'sein' },
   'ankommen': { meaning: 'to arrive', partOfSpeech: 'verb', gender: null, cefrLevel: 'A1', exampleSentence: 'Der Zug kommt pünktlich um 14 Uhr an.', verbType: 'irregular', auxiliaryType: 'sein' },
   'abfahren': { meaning: 'to depart', partOfSpeech: 'verb', gender: null, cefrLevel: 'A1', exampleSentence: 'Der Bus fährt in fünf Minuten ab.', verbType: 'irregular', auxiliaryType: 'sein' },
+
+  // Essential Nouns
+  'apfel': { meaning: 'apple', partOfSpeech: 'noun', gender: 'masculine', pluralForm: 'die Äpfel', cefrLevel: 'A1', exampleSentence: 'Ich esse jeden Morgen einen frischen Apfel.' },
+  'buch': { meaning: 'book', partOfSpeech: 'noun', gender: 'neuter', pluralForm: 'die Bücher', cefrLevel: 'A1', exampleSentence: 'Ich lese ein interessantes Buch auf Deutsch.' },
+  'haus': { meaning: 'house', partOfSpeech: 'noun', gender: 'neuter', pluralForm: 'die Häuser', cefrLevel: 'A1', exampleSentence: 'Unser Haus hat einen schönen Garten.' },
+  'hund': { meaning: 'dog', partOfSpeech: 'noun', gender: 'masculine', pluralForm: 'die Hunde', cefrLevel: 'A1', exampleSentence: 'Der Hund spielt fröhlich im Garten.' },
+  'katze': { meaning: 'cat', partOfSpeech: 'noun', gender: 'feminine', pluralForm: 'die Katzen', cefrLevel: 'A1', exampleSentence: 'Die Katze schläft gemütlich auf dem Sofa.' },
+  'tisch': { meaning: 'table', partOfSpeech: 'noun', gender: 'masculine', pluralForm: 'die Tische', cefrLevel: 'A1', exampleSentence: 'Das Essen steht schon auf dem Tisch.' },
+  'stuhl': { meaning: 'chair', partOfSpeech: 'noun', gender: 'masculine', pluralForm: 'die Stühle', cefrLevel: 'A1', exampleSentence: 'Nimm bitte auf dem Stuhl Platz.' },
+  'auto': { meaning: 'car', partOfSpeech: 'noun', gender: 'neuter', pluralForm: 'die Autos', cefrLevel: 'A1', exampleSentence: 'Mein neues Auto fährt sehr schnell.' },
+  'brot': { meaning: 'bread', partOfSpeech: 'noun', gender: 'neuter', pluralForm: 'die Brote', cefrLevel: 'A1', exampleSentence: 'Ich kaufe frisches Brot beim Bäcker.' },
+  'wasser': { meaning: 'water', partOfSpeech: 'noun', gender: 'neuter', pluralForm: null, cefrLevel: 'A1', exampleSentence: 'Bitte trinke ausreichend kaltes Wasser.' },
+  'kaffee': { meaning: 'coffee', partOfSpeech: 'noun', gender: 'masculine', pluralForm: null, cefrLevel: 'A1', exampleSentence: 'Morgens trinke ich immer eine Tasse Kaffee.' },
+  'tee': { meaning: 'tea', partOfSpeech: 'noun', gender: 'masculine', pluralForm: null, cefrLevel: 'A1', exampleSentence: 'Möchtest du heißen Tee mit Zitrone?' },
+  'milch': { meaning: 'milk', partOfSpeech: 'noun', gender: 'feminine', pluralForm: null, cefrLevel: 'A1', exampleSentence: 'Gießen Sie etwas Milch in den Kaffee.' },
+  'frühstück': { meaning: 'breakfast', partOfSpeech: 'noun', gender: 'neuter', pluralForm: 'die Frühstücke', cefrLevel: 'A1', exampleSentence: 'Zum Frühstück esse ich Müsli und Obst.' },
+  'mittagessen': { meaning: 'lunch', partOfSpeech: 'noun', gender: 'neuter', pluralForm: 'die Mittagessen', cefrLevel: 'A1', exampleSentence: 'Um zwölf Uhr machen wir Pause fürs Mittagessen.' },
+  'abendessen': { meaning: 'dinner, supper', partOfSpeech: 'noun', gender: 'neuter', pluralForm: 'die Abendessen', cefrLevel: 'A1', exampleSentence: 'Was kochen wir heute zum Abendessen?' },
+  'mädchen': { meaning: 'girl', partOfSpeech: 'noun', gender: 'neuter', pluralForm: 'die Mädchen', cefrLevel: 'A1', exampleSentence: 'Das kleine Mädchen lacht fröhlich.' },
+  'junge': { meaning: 'boy', partOfSpeech: 'noun', gender: 'masculine', pluralForm: 'die Jungen', cefrLevel: 'A1', exampleSentence: 'Der Junge spielt draußen Fußball.' },
+  'mann': { meaning: 'man, husband', partOfSpeech: 'noun', gender: 'masculine', pluralForm: 'die Männer', cefrLevel: 'A1', exampleSentence: 'Der Mann wartet an der Haltestelle.' },
+  'frau': { meaning: 'woman, wife, Ms.', partOfSpeech: 'noun', gender: 'feminine', pluralForm: 'die Frauen', cefrLevel: 'A1', exampleSentence: 'Frau Schmidt unterrichtet Deutsch an der Schule.' },
+  'kind': { meaning: 'child', partOfSpeech: 'noun', gender: 'neuter', pluralForm: 'die Kinder', cefrLevel: 'A1', exampleSentence: 'Das Kind malt ein schönes Bild.' },
+  'freund': { meaning: 'friend (male)', partOfSpeech: 'noun', gender: 'masculine', pluralForm: 'die Freunde', cefrLevel: 'A1', exampleSentence: 'Mein bester Freund wohnt in Hamburg.' },
+  'freundin': { meaning: 'friend (female), girlfriend', partOfSpeech: 'noun', gender: 'feminine', pluralForm: 'die Freundinnen', cefrLevel: 'A1', exampleSentence: 'Meine Freundin lernt auch Deutsch.' },
+  'stadt': { meaning: 'city, town', partOfSpeech: 'noun', gender: 'feminine', pluralForm: 'die Städte', cefrLevel: 'A1', exampleSentence: 'Berlin ist eine sehr lebendige Stadt.' },
+  'schule': { meaning: 'school', partOfSpeech: 'noun', gender: 'feminine', pluralForm: 'die Schulen', cefrLevel: 'A1', exampleSentence: 'Die Kinder gehen gerne in die Schule.' },
+  'arzt': { meaning: 'doctor, physician', partOfSpeech: 'noun', gender: 'masculine', pluralForm: 'die Ärzte', cefrLevel: 'A1', exampleSentence: 'Der Arzt untersucht den Patienten.' },
+  'zeit': { meaning: 'time', partOfSpeech: 'noun', gender: 'feminine', pluralForm: 'die Zeiten', cefrLevel: 'A1', exampleSentence: 'Hast du heute etwas freie Zeit für mich?' },
+  'tag': { meaning: 'day', partOfSpeech: 'noun', gender: 'masculine', pluralForm: 'die Tage', cefrLevel: 'A1', exampleSentence: 'Ich wünsche dir einen wunderschönen Tag!' },
+  'nacht': { meaning: 'night', partOfSpeech: 'noun', gender: 'feminine', pluralForm: 'die Nächte', cefrLevel: 'A1', exampleSentence: 'Gute Nacht und schlaf gut!' },
+  'woche': { meaning: 'week', partOfSpeech: 'noun', gender: 'feminine', pluralForm: 'die Wochen', cefrLevel: 'A1', exampleSentence: 'Nächste Woche fahre ich in den Urlaub.' },
+  'jahr': { meaning: 'year', partOfSpeech: 'noun', gender: 'neuter', pluralForm: 'die Jahre', cefrLevel: 'A1', exampleSentence: 'Ich lerne seit einem Jahr Deutsch.' },
 };
 
+const COMMON_TYPOS: Record<string, string> = {
+  'gehn': 'gehen',
+  'sehn': 'sehen',
+  'stehn': 'stehen',
+  'fahrem': 'fahren',
+  'nehm': 'nehmen',
+  'artzt': 'arzt',
+  'schuller': 'schüler',
+  'fruehstueck': 'frühstück',
+  'fruhstuck': 'frühstück',
+  'madchen': 'mädchen',
+  'maedchen': 'mädchen',
+};
+
+function makeEntryWithCanonical(key: string, entry: DictionaryEntry): DictionaryEntry {
+  let canonicalWord = key;
+  if (entry.partOfSpeech === 'noun') {
+    const art = entry.gender === 'feminine' ? 'die' : entry.gender === 'neuter' ? 'das' : 'der';
+    const cap = key.charAt(0).toUpperCase() + key.slice(1);
+    canonicalWord = `${art} ${cap}`;
+  }
+  return { ...entry, canonicalWord };
+}
+
 /**
- * Returns clean dictionary entry if available.
+ * Returns clean dictionary entry if available with phonetic/typo resilience.
  */
 export function lookupWord(raw: string): DictionaryEntry | null {
+  if (!raw || typeof raw !== 'string') return null;
+
   const clean = raw
     .toLowerCase()
     .replace(/^(der|die|das|ein|eine|einen|einem|einer|eines)\s+/i, '')
     .trim();
 
-  return COMMON_GERMAN_DICTIONARY[clean] || COMMON_GERMAN_DICTIONARY[raw.toLowerCase().trim()] || null;
+  if (!clean) return null;
+
+  // 1. Direct match
+  if (COMMON_GERMAN_DICTIONARY[clean]) {
+    return makeEntryWithCanonical(clean, COMMON_GERMAN_DICTIONARY[clean]);
+  }
+  const rawKey = raw.toLowerCase().trim();
+  if (COMMON_GERMAN_DICTIONARY[rawKey]) {
+    return makeEntryWithCanonical(rawKey, COMMON_GERMAN_DICTIONARY[rawKey]);
+  }
+
+  // 2. Common typos / shortcuts
+  if (COMMON_TYPOS[clean] && COMMON_GERMAN_DICTIONARY[COMMON_TYPOS[clean]]) {
+    const targetKey = COMMON_TYPOS[clean];
+    return makeEntryWithCanonical(targetKey, COMMON_GERMAN_DICTIONARY[targetKey]);
+  }
+
+  // 3. Digraph expansion (ae -> ä, oe -> ö, ue -> ü, ss -> ß)
+  const withDigraphs = clean
+    .replace(/ae/g, 'ä')
+    .replace(/oe/g, 'ö')
+    .replace(/ue/g, 'ü')
+    .replace(/ss/g, 'ß');
+  if (COMMON_GERMAN_DICTIONARY[withDigraphs]) {
+    return makeEntryWithCanonical(withDigraphs, COMMON_GERMAN_DICTIONARY[withDigraphs]);
+  }
+
+  // 4. Missing umlaut replacement (e.g. fruhstuck -> frühstück, madchen -> mädchen)
+  const withUmlauts = clean
+    .replace(/u/g, 'ü')
+    .replace(/a/g, 'ä')
+    .replace(/o/g, 'ö');
+  if (COMMON_GERMAN_DICTIONARY[withUmlauts]) {
+    return makeEntryWithCanonical(withUmlauts, COMMON_GERMAN_DICTIONARY[withUmlauts]);
+  }
+
+  // 5. Strip trailing punctuation
+  const stripped = clean.replace(/[.,;:!?]+$/, '');
+  if (COMMON_GERMAN_DICTIONARY[stripped]) {
+    return makeEntryWithCanonical(stripped, COMMON_GERMAN_DICTIONARY[stripped]);
+  }
+
+  return null;
 }

@@ -3,27 +3,12 @@ import { db } from '@/lib/db';
 import { userWords, wordBatches } from '@/lib/schema';
 import { eq, and, sql } from 'drizzle-orm';
 import { getSession } from '@/lib/auth';
-import { enrichWords } from '@/lib/groq';
+import { enrichWordsWithGemini } from '@/lib/gemini';
+import { parseAndCleanWords, normalizeWord } from '@/lib/word-parser';
 
 export const maxDuration = 60;
 
-function parseWords(wordsString: string): string[] {
-  const lines = wordsString.split(/\n+/).map((l) => l.trim()).filter(Boolean);
-  const entries: string[] = [];
-  for (const line of lines) {
-    const segments = line.split(/[,;]+/).map((s) => s.trim()).filter(Boolean);
-    for (const seg of segments) {
-      if (seg.length > 0) entries.push(seg);
-    }
-  }
-  return Array.from(new Set(entries));
-}
-
-function normalizeForComparison(word: string): string {
-  return word.toLowerCase().replace(/^(der|die|das|ein|eine|einen|einem|einer|eines)\s+/i, '').trim();
-}
-
-// POST /api/vocabulary/sets/[setId]/words - Append comma-separated words to an existing set
+// POST /api/vocabulary/sets/[setId]/words - Append words to an existing set
 export async function POST(
   req: NextRequest,
   { params }: { params: Promise<{ setId: string }> }
@@ -47,76 +32,140 @@ export async function POST(
       return NextResponse.json({ error: 'Please enter at least one word' }, { status: 400 });
     }
 
-    const parsedWords = parseWords(wordsInput);
+    // Clean and deduplicate input ("repeated words shouldn't come")
+    const parsedWords = parseAndCleanWords(wordsInput);
     if (parsedWords.length === 0) {
-      return NextResponse.json({ error: 'No valid words parsed from input' }, { status: 400 });
+      return NextResponse.json({ error: 'No valid German words parsed from input' }, { status: 400 });
     }
 
-    // 1. Fetch user's existing words to prevent duplicates
-    const existingRows = await db
+    // 1. Fetch words currently in THIS specific set to prevent duplicates in this set
+    const currentSetWords = await db
       .select({ word: userWords.word })
       .from(userWords)
-      .where(eq(userWords.userId, session.id));
+      .where(and(eq(userWords.batchId, setId), eq(userWords.userId, session.id)));
 
-    const existingNormalized = new Set(existingRows.map((r) => normalizeForComparison(r.word)));
+    const currentSetRoots = new Set(currentSetWords.map((r) => normalizeWord(r.word)));
 
-    // 2. Filter out already-existing words
-    const newWords = parsedWords.filter((w) => !existingNormalized.has(normalizeForComparison(w)));
-    const skippedCount = parsedWords.length - newWords.length;
+    // Filter out words that are already in this set
+    const newWordsForSet = parsedWords.filter((w) => !currentSetRoots.has(normalizeWord(w)));
+    const skippedDuplicateCount = parsedWords.length - newWordsForSet.length;
 
-    if (newWords.length === 0) {
+    if (newWordsForSet.length === 0) {
       return NextResponse.json(
         {
-          error: `All ${parsedWords.length} word(s) already exist in your vocabulary.`,
-          skipped: skippedCount,
+          error: `All ${parsedWords.length} word(s) are already in this set.`,
+          skipped: skippedDuplicateCount,
         },
         { status: 400 }
       );
     }
 
-    // 3. AI Enrichment
-    let enrichedWords;
-    try {
-      enrichedWords = await enrichWords(newWords);
-    } catch (enrichErr) {
-      console.error('Enrichment failed:', enrichErr);
-      const msg = enrichErr instanceof Error ? enrichErr.message : 'Unknown error';
-      return NextResponse.json({ error: `Enrichment failed: ${msg}` }, { status: 500 });
+    // 2. Check if user already has high-quality enriched data for these words in their library
+    const allUserWords = await db
+      .select()
+      .from(userWords)
+      .where(eq(userWords.userId, session.id));
+
+    const libraryByRoot = new Map<string, typeof allUserWords[0]>();
+    for (const row of allUserWords) {
+      const root = normalizeWord(row.word);
+      if (!libraryByRoot.has(root) && row.meaning && normalizeWord(row.meaning) !== root) {
+        libraryByRoot.set(root, row);
+      }
     }
 
-    if (!enrichedWords || enrichedWords.length === 0) {
-      return NextResponse.json({ error: 'Failed to enrich words' }, { status: 400 });
+    const wordsToEnrich: string[] = [];
+    const reusedData: typeof allUserWords = [];
+
+    for (const w of newWordsForSet) {
+      const root = normalizeWord(w);
+      const existing = libraryByRoot.get(root);
+      if (existing) {
+        reusedData.push(existing);
+      } else {
+        wordsToEnrich.push(w);
+      }
     }
 
-    // 4. Final duplicate guard after enrichment
-    const deduped = enrichedWords.filter((w) => !existingNormalized.has(normalizeForComparison(w.word)));
-    if (deduped.length === 0) {
-      return NextResponse.json(
-        { error: 'All words already exist in your vocabulary', skipped: parsedWords.length },
-        { status: 400 }
-      );
+    let newlyEnriched: Awaited<ReturnType<typeof enrichWordsWithGemini>> = [];
+    if (wordsToEnrich.length > 0) {
+      try {
+        newlyEnriched = await enrichWordsWithGemini(wordsToEnrich);
+      } catch (enrichErr) {
+        console.error('Enrichment failed:', enrichErr);
+        const msg = enrichErr instanceof Error ? enrichErr.message : 'Unknown error';
+        return NextResponse.json({ error: `Enrichment failed: ${msg}` }, { status: 500 });
+      }
     }
 
-    // 5. Insert new words into set
+    // Combine all words ensuring unique roots in the set
+    const seenRootsInSet = new Set<string>(currentSetRoots);
+    const itemsToInsert: Array<{
+      word: string;
+      partOfSpeech: string;
+      gender: string | null;
+      pluralForm: string | null;
+      conjugation: Record<string, string> | null;
+      meaning: string;
+      cefrLevel: string;
+      exampleSentence: string | null;
+      verbType: string | null;
+      auxiliaryType: string | null;
+      presentForm: string | null;
+      simplePast: string | null;
+      perfectForm: string | null;
+    }> = [];
+
+    for (const r of reusedData) {
+      const root = normalizeWord(r.word);
+      if (seenRootsInSet.has(root)) continue;
+      seenRootsInSet.add(root);
+      itemsToInsert.push({
+        word: r.word,
+        partOfSpeech: r.partOfSpeech,
+        gender: r.partOfSpeech.toLowerCase() === 'noun' ? r.gender : null,
+        pluralForm: r.pluralForm,
+        conjugation: r.conjugation as Record<string, string> | null,
+        meaning: r.meaning,
+        cefrLevel: r.cefrLevel,
+        exampleSentence: r.exampleSentence,
+        verbType: r.verbType,
+        auxiliaryType: r.auxiliaryType,
+        presentForm: r.presentForm,
+        simplePast: r.simplePast,
+        perfectForm: r.perfectForm,
+      });
+    }
+
+    for (const w of newlyEnriched) {
+      const root = normalizeWord(w.word);
+      if (seenRootsInSet.has(root)) continue;
+      seenRootsInSet.add(root);
+      itemsToInsert.push({
+        word: w.word,
+        partOfSpeech: w.part_of_speech,
+        gender: w.part_of_speech.toLowerCase() === 'noun' ? (w.gender ?? null) : null,
+        pluralForm: w.plural_form ?? null,
+        conjugation: (w.conjugation as Record<string, string> | null) ?? null,
+        meaning: w.meaning,
+        cefrLevel: w.cefr_level ?? 'A1',
+        exampleSentence: w.example_sentence ?? null,
+        verbType: w.verb_type ?? null,
+        auxiliaryType: w.auxiliary_type ?? null,
+        presentForm: w.present_form ?? null,
+        simplePast: w.simple_past ?? null,
+        perfectForm: w.perfect_form ?? null,
+      });
+    }
+
+    // Insert new words into set
     const insertedWords = [];
-    for (const w of deduped) {
+    for (const item of itemsToInsert) {
       const [inserted] = await db
         .insert(userWords)
         .values({
           userId: session.id,
-          word: w.word,
-          partOfSpeech: w.part_of_speech,
-          gender: w.gender ?? null,
-          pluralForm: w.plural_form ?? null,
-          conjugation: (w.conjugation as Record<string, string> | null) ?? null,
-          meaning: w.meaning,
-          cefrLevel: w.cefr_level ?? 'A1',
-          exampleSentence: w.example_sentence ?? null,
-          verbType: w.verb_type ?? null,
-          auxiliaryType: w.auxiliary_type ?? null,
-          presentForm: w.present_form ?? null,
-          simplePast: w.simple_past ?? null,
-          perfectForm: w.perfect_form ?? null,
+          ...item,
           batchId: setId,
           learned: false,
         })
@@ -127,17 +176,17 @@ export async function POST(
     // Update batch word count
     await db
       .update(wordBatches)
-      .set({ wordCount: sql`${wordBatches.wordCount} + ${deduped.length}` })
+      .set({ wordCount: sql`${wordBatches.wordCount} + ${insertedWords.length}` })
       .where(eq(wordBatches.id, setId));
 
     return NextResponse.json({
       success: true,
       addedWords: insertedWords,
-      addedCount: deduped.length,
-      skippedCount: parsedWords.length - deduped.length,
+      addedCount: insertedWords.length,
+      skippedCount: skippedDuplicateCount,
     });
   } catch (error) {
     console.error('Error adding words to set:', error);
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
+    return NextResponse.json({ error: 'Failed to add words to set' }, { status: 500 });
   }
 }

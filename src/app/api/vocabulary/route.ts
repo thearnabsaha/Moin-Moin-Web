@@ -4,6 +4,7 @@ import { db } from '@/lib/db';
 import { userWords, wordBatches } from '@/lib/schema';
 import { getCurrentUserId } from '@/lib/get-user';
 import { enrichWordsWithGemini } from '@/lib/gemini';
+import { parseAndCleanWords, normalizeWord } from '@/lib/word-parser';
 
 type PartOfSpeech = 'noun' | 'verb' | 'adjective' | 'preposition' | 'conjunction' | 'other';
 type Gender = 'masculine' | 'feminine' | 'neuter';
@@ -39,11 +40,29 @@ function normalizeGender(g: string | null): Gender | null {
 export async function GET() {
   try {
     const userId = await getCurrentUserId();
-    const rows = await db
+    const rawRows = await db
       .select()
       .from(userWords)
       .where(eq(userWords.userId, userId))
       .orderBy(desc(userWords.createdAt));
+
+    // Deduplicate words so repeated words never appear in the vocabulary library
+    const uniqueWordMap = new Map<string, typeof rawRows[0]>();
+    for (const row of rawRows) {
+      const root = normalizeWord(row.word);
+      if (!root) continue;
+      if (!uniqueWordMap.has(root)) {
+        uniqueWordMap.set(root, row);
+      } else {
+        const existing = uniqueWordMap.get(root)!;
+        const scoreExisting = (existing.learned ? 100 : 0) + (existing.stability || 0) * 10 + (existing.reps || 0);
+        const scoreCurrent = (row.learned ? 100 : 0) + (row.stability || 0) * 10 + (row.reps || 0);
+        if (scoreCurrent > scoreExisting) {
+          uniqueWordMap.set(root, row);
+        }
+      }
+    }
+    const rows = Array.from(uniqueWordMap.values());
 
     const analytics: Analytics = {
       totalWords: rows.length,
@@ -131,24 +150,6 @@ export async function DELETE(request: NextRequest) {
   }
 }
 
-function normalizeForComparison(w: string): string {
-  return w
-    .toLowerCase()
-    .replace(/^(der|die|das|dem|den|des)\s+/, '')
-    .trim();
-}
-
-function parseWords(input: string): string[] {
-  return Array.from(
-    new Set(
-      input
-        .split(/[\n,;]+/)
-        .map((w) => w.trim())
-        .filter((w) => w.length > 0)
-    )
-  );
-}
-
 // POST /api/vocabulary - Add and enrich German words with Gemini AI
 export async function POST(request: NextRequest) {
   try {
@@ -160,38 +161,110 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Please provide one or more German words' }, { status: 400 });
     }
 
-    const parsed = parseWords(rawInput);
+    // Clean input and eliminate repeated words ("repeated words shouldn't come")
+    const parsed = parseAndCleanWords(rawInput);
     if (parsed.length === 0) {
-      return NextResponse.json({ error: 'No valid words parsed from input' }, { status: 400 });
+      return NextResponse.json({ error: 'No valid German words parsed from input' }, { status: 400 });
     }
 
     // Check existing words
     const existingRows = await db
-      .select({ word: userWords.word })
+      .select()
       .from(userWords)
       .where(eq(userWords.userId, userId));
-    const existingNorm = new Set(existingRows.map((r) => normalizeForComparison(r.word)));
 
-    const newWords = parsed.filter((w) => !existingNorm.has(normalizeForComparison(w)));
-    if (newWords.length === 0) {
-      return NextResponse.json(
-        { error: 'All words already exist in your vocabulary', added: 0, skipped: parsed.length },
-        { status: 400 }
-      );
+    const existingByRoot = new Map<string, typeof existingRows[0]>();
+    for (const row of existingRows) {
+      const root = normalizeWord(row.word);
+      if (!existingByRoot.has(root) && row.meaning && normalizeWord(row.meaning) !== root) {
+        existingByRoot.set(root, row);
+      }
     }
 
-    // Enrich with Gemini
-    const enriched = await enrichWordsWithGemini(newWords);
-    if (!enriched || enriched.length === 0) {
-      return NextResponse.json({ error: 'Enrichment failed. Please try again.' }, { status: 500 });
+    const wordsToEnrich: string[] = [];
+    const reusedData: typeof existingRows = [];
+
+    for (const w of parsed) {
+      const root = normalizeWord(w);
+      const existing = existingByRoot.get(root);
+      if (existing) {
+        reusedData.push(existing);
+      } else {
+        wordsToEnrich.push(w);
+      }
     }
 
-    const deduped = enriched.filter((w) => !existingNorm.has(normalizeForComparison(w.word)));
-    if (deduped.length === 0) {
-      return NextResponse.json(
-        { error: 'All words already exist in your vocabulary', added: 0, skipped: parsed.length },
-        { status: 400 }
-      );
+    let newlyEnriched: Awaited<ReturnType<typeof enrichWordsWithGemini>> = [];
+    if (wordsToEnrich.length > 0) {
+      try {
+        newlyEnriched = await enrichWordsWithGemini(wordsToEnrich);
+      } catch (enrichErr) {
+        console.error('Enrichment failed:', enrichErr);
+        return NextResponse.json({ error: 'Failed to enrich words' }, { status: 500 });
+      }
+    }
+
+    const seenRootsInBatch = new Set<string>();
+    const itemsToInsert: Array<{
+      word: string;
+      partOfSpeech: string;
+      gender: string | null;
+      pluralForm: string | null;
+      conjugation: Record<string, string> | null;
+      meaning: string;
+      cefrLevel: string;
+      exampleSentence: string | null;
+      verbType: string | null;
+      auxiliaryType: string | null;
+      presentForm: string | null;
+      simplePast: string | null;
+      perfectForm: string | null;
+    }> = [];
+
+    for (const r of reusedData) {
+      const root = normalizeWord(r.word);
+      if (seenRootsInBatch.has(root)) continue;
+      seenRootsInBatch.add(root);
+      itemsToInsert.push({
+        word: r.word,
+        partOfSpeech: r.partOfSpeech,
+        gender: r.partOfSpeech.toLowerCase() === 'noun' ? r.gender : null,
+        pluralForm: r.pluralForm,
+        conjugation: r.conjugation as Record<string, string> | null,
+        meaning: r.meaning,
+        cefrLevel: r.cefrLevel,
+        exampleSentence: r.exampleSentence,
+        verbType: r.verbType,
+        auxiliaryType: r.auxiliaryType,
+        presentForm: r.presentForm,
+        simplePast: r.simplePast,
+        perfectForm: r.perfectForm,
+      });
+    }
+
+    for (const w of newlyEnriched) {
+      const root = normalizeWord(w.word);
+      if (seenRootsInBatch.has(root)) continue;
+      seenRootsInBatch.add(root);
+      itemsToInsert.push({
+        word: w.word,
+        partOfSpeech: w.part_of_speech,
+        gender: w.part_of_speech.toLowerCase() === 'noun' ? (w.gender ?? null) : null,
+        pluralForm: w.plural_form ?? null,
+        conjugation: (w.conjugation as Record<string, string> | null) ?? null,
+        meaning: w.meaning,
+        cefrLevel: w.cefr_level ?? 'A1',
+        exampleSentence: w.example_sentence ?? null,
+        verbType: w.verb_type ?? null,
+        auxiliaryType: w.auxiliary_type ?? null,
+        presentForm: w.present_form ?? null,
+        simplePast: w.simple_past ?? null,
+        perfectForm: w.perfect_form ?? null,
+      });
+    }
+
+    if (itemsToInsert.length === 0) {
+      return NextResponse.json({ error: 'No words to add' }, { status: 400 });
     }
 
     // Create a batch
@@ -201,30 +274,18 @@ export async function POST(request: NextRequest) {
       .values({
         userId,
         name: setName,
-        wordCount: deduped.length,
+        wordCount: itemsToInsert.length,
         learnedCount: 0,
       })
       .returning();
 
     const created = [];
-    for (const w of deduped) {
+    for (const item of itemsToInsert) {
       const [inserted] = await db
         .insert(userWords)
         .values({
           userId,
-          word: w.word,
-          partOfSpeech: w.part_of_speech,
-          gender: w.gender ?? null,
-          pluralForm: w.plural_form ?? null,
-          conjugation: (w.conjugation as Record<string, string> | null) ?? null,
-          meaning: w.meaning,
-          cefrLevel: w.cefr_level ?? 'A1',
-          exampleSentence: w.example_sentence ?? null,
-          verbType: w.verb_type ?? null,
-          auxiliaryType: w.auxiliary_type ?? null,
-          presentForm: w.present_form ?? null,
-          simplePast: w.simple_past ?? null,
-          perfectForm: w.perfect_form ?? null,
+          ...item,
           batchId: batch.id,
           learned: false,
         })
@@ -235,7 +296,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({
       success: true,
       added: created.length,
-      skipped: parsed.length - newWords.length + (enriched.length - deduped.length),
+      skipped: 0,
       words: created,
       batch,
     });

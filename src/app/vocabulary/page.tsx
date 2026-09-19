@@ -515,7 +515,7 @@ export default function VocabularyPage() {
 
                       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-1">
                         <span className="text-[11px] font-semibold text-[var(--text-tertiary)]">
-                          ✨ Duplicates in your input or library are automatically skipped.
+                          ✨ All words are spell-checked and enriched with Gemini AI. Duplicate words are automatically merged.
                         </span>
 
                         <div className="flex items-center gap-2 self-end sm:self-auto">
