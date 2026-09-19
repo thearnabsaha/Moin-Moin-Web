@@ -167,15 +167,37 @@ export const COMMON_GERMAN_DICTIONARY: Record<string, DictionaryEntry> = {
   'warten': { meaning: 'to wait', partOfSpeech: 'verb', gender: null, cefrLevel: 'A1', exampleSentence: 'Ich warte an der Bushaltestelle auf dich.', verbType: 'regular', auxiliaryType: 'haben' },
   'helfen': { meaning: 'to help', partOfSpeech: 'verb', gender: null, cefrLevel: 'A1', exampleSentence: 'Kannst du mir bitte kurz helfen?', verbType: 'irregular', auxiliaryType: 'haben' },
   'nehmen': { meaning: 'to take', partOfSpeech: 'verb', gender: null, cefrLevel: 'A1', exampleSentence: 'Ich nehme ein Glas Orangensaft.', verbType: 'irregular', auxiliaryType: 'haben' },
-  'bringen': { meaning: 'to bring', partOfSpeech: 'verb', gender: null, cefrLevel: 'A1', exampleSentence: 'Bringst du mir bitte ein Glas Wasser mit?', verbType: 'mixed', auxiliaryType: 'haben' },
-  'öffnen': { meaning: 'to open', partOfSpeech: 'verb', gender: null, cefrLevel: 'A1', exampleSentence: 'Kannst du bitte das Fenster öffnen?', verbType: 'regular', auxiliaryType: 'haben' },
-  'schließen': { meaning: 'to close', partOfSpeech: 'verb', gender: null, cefrLevel: 'A1', exampleSentence: 'Vergiss nicht, die Haustür zu schließen.', verbType: 'irregular', auxiliaryType: 'haben' },
-  'anfangen': { meaning: 'to start, to begin', partOfSpeech: 'verb', gender: null, cefrLevel: 'A1', exampleSentence: 'Wann fängt der Deutschkurs an?', verbType: 'irregular', auxiliaryType: 'haben' },
-  'aufhören': { meaning: 'to stop, to cease', partOfSpeech: 'verb', gender: null, cefrLevel: 'A1', exampleSentence: 'Der Regen hat endlich aufgehört.', verbType: 'regular', auxiliaryType: 'haben' },
-  'aufstehen': { meaning: 'to stand up, to get up', partOfSpeech: 'verb', gender: null, cefrLevel: 'A1', exampleSentence: 'Ich stehe jeden Morgen um sieben Uhr auf.', verbType: 'irregular', auxiliaryType: 'sein' },
-  'einschlafen': { meaning: 'to fall asleep', partOfSpeech: 'verb', gender: null, cefrLevel: 'A1', exampleSentence: 'Er schläft immer sehr schnell ein.', verbType: 'irregular', auxiliaryType: 'sein' },
-  'ankommen': { meaning: 'to arrive', partOfSpeech: 'verb', gender: null, cefrLevel: 'A1', exampleSentence: 'Der Zug kommt pünktlich um 14 Uhr an.', verbType: 'irregular', auxiliaryType: 'sein' },
-  'abfahren': { meaning: 'to depart', partOfSpeech: 'verb', gender: null, cefrLevel: 'A1', exampleSentence: 'Der Bus fährt in fünf Minuten ab.', verbType: 'irregular', auxiliaryType: 'sein' },
+  'danken': { meaning: 'to thank', partOfSpeech: 'verb', gender: null, cefrLevel: 'A1', exampleSentence: 'Ich danke Ihnen herzlich für Ihre Hilfe.', verbType: 'regular', auxiliaryType: 'haben' },
+  'heißen': { meaning: 'to be called, to be named, to mean', partOfSpeech: 'verb', gender: null, cefrLevel: 'A1', exampleSentence: 'Ich heiße Anna und komme aus Berlin.', verbType: 'irregular', auxiliaryType: 'haben' },
+  'es geht': { meaning: 'so-so, it is okay, doing fine', partOfSpeech: 'other', gender: null, cefrLevel: 'A1', exampleSentence: 'Wie geht es dir? – Es geht, danke.', verbType: null, auxiliaryType: 'sein' },
+  'es gibt': { meaning: 'there is, there are', partOfSpeech: 'other', gender: null, cefrLevel: 'A1', exampleSentence: 'In der Stadt gibt es viele interessante Museen.' },
+  'wie gehts': { meaning: 'how is it going? how are you?', partOfSpeech: 'other', gender: null, cefrLevel: 'A1', exampleSentence: 'Hallo Thomas! Wie geht\'s dir heute?' },
+  'wie geht es': { meaning: 'how is it going? how are you?', partOfSpeech: 'other', gender: null, cefrLevel: 'A1', exampleSentence: 'Wie geht es Ihnen, Herr Meier?' },
+  'bekommen': { meaning: 'to get, to receive', partOfSpeech: 'verb', gender: null, cefrLevel: 'A1', exampleSentence: 'Ich bekomme jeden Tag viele E-Mails.', verbType: 'irregular', auxiliaryType: 'haben' },
+  'bestellen': { meaning: 'to order', partOfSpeech: 'verb', gender: null, cefrLevel: 'A1', exampleSentence: 'Wir möchten bitte zwei Pizzen bestellen.', verbType: 'regular', auxiliaryType: 'haben' },
+  'besuchen': { meaning: 'to visit', partOfSpeech: 'verb', gender: null, cefrLevel: 'A1', exampleSentence: 'Am Wochenende besuche ich meine Großeltern.', verbType: 'regular', auxiliaryType: 'haben' },
+  'fehlen': { meaning: 'to miss, to lack, to be missing', partOfSpeech: 'verb', gender: null, cefrLevel: 'A1', exampleSentence: 'Du fehlst mir sehr!', verbType: 'regular', auxiliaryType: 'haben' },
+  'feiern': { meaning: 'to celebrate', partOfSpeech: 'verb', gender: null, cefrLevel: 'A1', exampleSentence: 'Heute Abend feiern wir seinen Geburtstag.', verbType: 'regular', auxiliaryType: 'haben' },
+  'fliegen': { meaning: 'to fly', partOfSpeech: 'verb', gender: null, cefrLevel: 'A1', exampleSentence: 'Im Sommer fliegen wir nach Spanien in den Urlaub.', verbType: 'irregular', auxiliaryType: 'sein' },
+  'glauben': { meaning: 'to believe, to think', partOfSpeech: 'verb', gender: null, cefrLevel: 'A1', exampleSentence: 'Ich glaube, dass alles gut klappen wird.', verbType: 'regular', auxiliaryType: 'haben' },
+  'hoffen': { meaning: 'to hope', partOfSpeech: 'verb', gender: null, cefrLevel: 'A1', exampleSentence: 'Ich hoffe, dass du die Prüfung bestehst.', verbType: 'regular', auxiliaryType: 'haben' },
+  'holen': { meaning: 'to get, to fetch', partOfSpeech: 'verb', gender: null, cefrLevel: 'A1', exampleSentence: 'Ich hole schnell meine Jacke aus dem Zimmer.', verbType: 'regular', auxiliaryType: 'haben' },
+  'kochen': { meaning: 'to cook', partOfSpeech: 'verb', gender: null, cefrLevel: 'A1', exampleSentence: 'Er kocht gerne frische Nudeln.', verbType: 'regular', auxiliaryType: 'haben' },
+  'kosten': { meaning: 'to cost', partOfSpeech: 'verb', gender: null, cefrLevel: 'A1', exampleSentence: 'Wie viel kostet dieses Ticket?', verbType: 'regular', auxiliaryType: 'haben' },
+  'lachen': { meaning: 'to laugh', partOfSpeech: 'verb', gender: null, cefrLevel: 'A1', exampleSentence: 'Die Kinder lachen über den lustigen Film.', verbType: 'regular', auxiliaryType: 'haben' },
+  'passen': { meaning: 'to fit, to suit', partOfSpeech: 'verb', gender: null, cefrLevel: 'A1', exampleSentence: 'Passt es Ihnen morgen um 10 Uhr?', verbType: 'regular', auxiliaryType: 'haben' },
+  'reisen': { meaning: 'to travel', partOfSpeech: 'verb', gender: null, cefrLevel: 'A1', exampleSentence: 'Wir reisen sehr gerne in andere Länder.', verbType: 'regular', auxiliaryType: 'sein' },
+  'schmecken': { meaning: 'to taste', partOfSpeech: 'verb', gender: null, cefrLevel: 'A1', exampleSentence: 'Das Essen schmeckt wirklich hervorragend!', verbType: 'regular', auxiliaryType: 'haben' },
+  'setzen': { meaning: 'to set, to sit down', partOfSpeech: 'verb', gender: null, cefrLevel: 'A1', exampleSentence: 'Setzen Sie sich bitte auf diesen Stuhl.', verbType: 'regular', auxiliaryType: 'haben' },
+  'stellen': { meaning: 'to put upright, to place', partOfSpeech: 'verb', gender: null, cefrLevel: 'A1', exampleSentence: 'Er stellt die Vase auf den Tisch.', verbType: 'regular', auxiliaryType: 'haben' },
+  'suchen': { meaning: 'to search for, to look for', partOfSpeech: 'verb', gender: null, cefrLevel: 'A1', exampleSentence: 'Ich suche schon den ganzen Morgen meinen Schlüssel.', verbType: 'regular', auxiliaryType: 'haben' },
+  'tanzen': { meaning: 'to dance', partOfSpeech: 'verb', gender: null, cefrLevel: 'A1', exampleSentence: 'Sie tanzen zusammen auf der Party.', verbType: 'regular', auxiliaryType: 'haben' },
+  'treffen': { meaning: 'to meet', partOfSpeech: 'verb', gender: null, cefrLevel: 'A1', exampleSentence: 'Ich treffe meine Freunde heute im Café.', verbType: 'irregular', auxiliaryType: 'haben' },
+  'vergessen': { meaning: 'to forget', partOfSpeech: 'verb', gender: null, cefrLevel: 'A1', exampleSentence: 'Vergiss bitte deinen Regenschirm nicht!', verbType: 'irregular', auxiliaryType: 'haben' },
+  'waschen': { meaning: 'to wash', partOfSpeech: 'verb', gender: null, cefrLevel: 'A1', exampleSentence: 'Ich wasche mir vor dem Essen gründlich die Hände.', verbType: 'irregular', auxiliaryType: 'haben' },
+  'wünschen': { meaning: 'to wish', partOfSpeech: 'verb', gender: null, cefrLevel: 'A1', exampleSentence: 'Ich wünsche dir einen wunderschönen Tag!', verbType: 'regular', auxiliaryType: 'haben' },
+  'zahlen': { meaning: 'to pay', partOfSpeech: 'verb', gender: null, cefrLevel: 'A1', exampleSentence: 'Wir möchten bitte zusammen zahlen.', verbType: 'regular', auxiliaryType: 'haben' },
+  'zeigen': { meaning: 'to show', partOfSpeech: 'verb', gender: null, cefrLevel: 'A1', exampleSentence: 'Können Sie mir bitte den Weg zum Bahnhof zeigen?', verbType: 'regular', auxiliaryType: 'haben' },
 
   // Essential Nouns
   'apfel': { meaning: 'apple', partOfSpeech: 'noun', gender: 'masculine', pluralForm: 'die Äpfel', cefrLevel: 'A1', exampleSentence: 'Ich esse jeden Morgen einen frischen Apfel.' },
@@ -241,16 +263,24 @@ function makeEntryWithCanonical(key: string, entry: DictionaryEntry): Dictionary
 export function lookupWord(raw: string): DictionaryEntry | null {
   if (!raw || typeof raw !== 'string') return null;
 
-  const clean = raw
+  const stripped = raw
     .toLowerCase()
+    .replace(/^["'„“«»`]+|["'„“«»`]+$/g, '')
+    .replace(/[.,;:!?]+$/g, '')
+    .trim();
+
+  const clean = stripped
     .replace(/^(der|die|das|ein|eine|einen|einem|einer|eines)\s+/i, '')
     .trim();
 
   if (!clean) return null;
 
-  // 1. Direct match
+  // 1. Direct match (by clean base or full expression)
   if (COMMON_GERMAN_DICTIONARY[clean]) {
     return makeEntryWithCanonical(clean, COMMON_GERMAN_DICTIONARY[clean]);
+  }
+  if (COMMON_GERMAN_DICTIONARY[stripped]) {
+    return makeEntryWithCanonical(stripped, COMMON_GERMAN_DICTIONARY[stripped]);
   }
   const rawKey = raw.toLowerCase().trim();
   if (COMMON_GERMAN_DICTIONARY[rawKey]) {
@@ -280,12 +310,6 @@ export function lookupWord(raw: string): DictionaryEntry | null {
     .replace(/o/g, 'ö');
   if (COMMON_GERMAN_DICTIONARY[withUmlauts]) {
     return makeEntryWithCanonical(withUmlauts, COMMON_GERMAN_DICTIONARY[withUmlauts]);
-  }
-
-  // 5. Strip trailing punctuation
-  const stripped = clean.replace(/[.,;:!?]+$/, '');
-  if (COMMON_GERMAN_DICTIONARY[stripped]) {
-    return makeEntryWithCanonical(stripped, COMMON_GERMAN_DICTIONARY[stripped]);
   }
 
   return null;

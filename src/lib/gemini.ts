@@ -10,13 +10,24 @@ import { lookupWord } from './dictionary-data';
 import { normalizeWord } from './word-parser';
 
 /**
- * Gemini model cascade ordered by speed, cost-effectiveness, and reliability.
+ * High-tier Google Gemini model cascade ordered by capability, intelligence, and reliability.
+ * gemini-3.8-flash is Google's premier, state-of-the-art model with advanced multilingual reasoning.
  */
 const GEMINI_MODELS = [
-  'gemini-3.5-flash-lite',
+  'gemini-3.8-flash',
+  'gemini-3.7-flash',
   'gemini-3.6-flash',
   'gemini-3.5-flash',
   'gemini-flash-latest',
+] as const;
+
+/**
+ * Secondary Groq high-tier model cascade for instantaneous fallback if Gemini is rate-limited.
+ */
+const GROQ_MODELS = [
+  'openai/gpt-oss-120b',
+  'qwen/qwen3.8-27b',
+  'openai/gpt-oss-20b',
 ] as const;
 
 const GEMINI_API_URL = 'https://generativelanguage.googleapis.com/v1beta/models';
@@ -36,7 +47,15 @@ export function isGeminiConfigured(): boolean {
   return Boolean(getGeminiApiKey());
 }
 
-interface CallGeminiParams {
+export function getGroqApiKey(): string | null {
+  return (
+    process.env.GROQ_API_KEY ||
+    process.env.NEXT_PUBLIC_GROQ_API_KEY ||
+    null
+  );
+}
+
+interface CallAiParams {
   systemInstruction?: string;
   prompt: string;
   temperature?: number;
@@ -55,9 +74,9 @@ function cleanJsonResponse(raw: string): string {
 }
 
 /**
- * Robust Gemini caller with model cascade and per-model timeout.
+ * Robust Gemini caller with premier model cascade, thinking-token separation, and per-model timeout.
  */
-export async function callGemini(params: CallGeminiParams): Promise<string> {
+export async function callGemini(params: CallAiParams): Promise<string> {
   const apiKey = getGeminiApiKey();
   if (!apiKey) {
     throw new Error('GEMINI_API_KEY is not configured');
@@ -66,9 +85,9 @@ export async function callGemini(params: CallGeminiParams): Promise<string> {
   const {
     systemInstruction,
     prompt,
-    temperature = 0.2,
+    temperature = 0.1,
     responseMimeType = 'application/json',
-    timeoutMs = 15_000,
+    timeoutMs = 18_000,
     preferredModel,
   } = params;
 
@@ -128,13 +147,23 @@ export async function callGemini(params: CallGeminiParams): Promise<string> {
       }
 
       const data = await response.json();
-      const textPart = data.candidates?.[0]?.content?.parts?.[0]?.text;
+      const parts = data.candidates?.[0]?.content?.parts;
 
-      if (!textPart) {
+      if (!parts || !Array.isArray(parts) || parts.length === 0) {
         throw new Error(`Empty content returned by Gemini model ${model}`);
       }
 
-      return cleanJsonResponse(textPart);
+      // Filter out internal thinking blocks and join genuine text output
+      const validTextParts = parts
+        .filter((p: { text?: string; thought?: boolean }) => !p.thought && typeof p.text === 'string' && p.text.trim())
+        .map((p: { text: string }) => p.text);
+
+      const rawText = validTextParts.length > 0 ? validTextParts.join('\n') : (parts[0].text || '');
+      if (!rawText.trim()) {
+        throw new Error(`No text content in parts from Gemini model ${model}`);
+      }
+
+      return cleanJsonResponse(rawText);
     } catch (err: unknown) {
       lastError = err;
       console.warn(`[Gemini] Error with model ${model}, attempting fallback...`, err);
@@ -144,33 +173,109 @@ export async function callGemini(params: CallGeminiParams): Promise<string> {
   throw lastError ?? new Error('All Gemini models exhausted');
 }
 
+/**
+ * Secondary Groq caller for dual-AI redundancy using high-capacity open models (120B / 27B).
+ */
+export async function callGroqFallback(params: {
+  systemInstruction?: string;
+  prompt: string;
+  temperature?: number;
+}): Promise<string> {
+  const apiKey = getGroqApiKey();
+  if (!apiKey) {
+    throw new Error('GROQ_API_KEY is not configured');
+  }
+
+  const messages: Array<{ role: 'system' | 'user'; content: string }> = [];
+  if (params.systemInstruction) {
+    messages.push({ role: 'system', content: params.systemInstruction });
+  }
+  messages.push({ role: 'user', content: params.prompt });
+
+  let lastError: unknown;
+
+  for (const model of GROQ_MODELS) {
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 12_000);
+
+      const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify({
+          model,
+          messages,
+          response_format: { type: 'json_object' },
+          temperature: params.temperature ?? 0.1,
+        }),
+        signal: controller.signal,
+      });
+
+      clearTimeout(timer);
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.warn(`[Groq] Model ${model} returned HTTP ${response.status}: ${errorText.slice(0, 150)}`);
+        continue;
+      }
+
+      const data = await response.json();
+      const content = data.choices?.[0]?.message?.content;
+      if (content) {
+        return cleanJsonResponse(content);
+      }
+    } catch (err) {
+      lastError = err;
+      console.warn(`[Groq] Error with model ${model}:`, err);
+    }
+  }
+
+  throw lastError ?? new Error('All Groq models exhausted');
+}
+
 // ── WORD ENRICHMENT PROMPT & LOGIC ─────────────────────────────
 
-const ENRICH_WORD_SYSTEM_PROMPT = `You are a German language lexicography and orthography expert. For each German word or phrase provided, return structured linguistic data in valid JSON.
+const ENRICH_WORD_SYSTEM_PROMPT = `You are a world-class German language lexicographer and Goethe-Institut certified linguistic expert. For each German word or phrase provided, return structured linguistic data in valid JSON.
 
-CRITICAL RULES:
+CRITICAL LINGUISTIC RULES:
 1. SPELLING & ORTHOGRAPHY CORRECTION:
 - Input words may have typos, phonetic spelling, missing or incorrect umlauts (ä, ö, ü, ß), wrong capitalization, or missing articles (e.g. "apfel", "fruhstuck", "gehn", "schon", "artzt", "madchen", "gross", "tisch").
-- You MUST CORRECT every word to its proper standard High German (Hochdeutsch) orthography!
-- NOUNS: German nouns MUST ALWAYS begin with a capital letter and MUST have their correct definite article ("der", "die", or "das") prepended (e.g. "apfel" → "der Apfel", "buch" → "das Buch", "frau" → "die Frau", "tisch" → "der Tisch"). Even if the user provided a bare noun, ALWAYS include the correct definite article.
+- Correct every word to standard High German (Hochdeutsch) orthography!
+- NOUNS: German nouns MUST ALWAYS begin with a capital letter and MUST have their correct definite article ("der", "die", or "das") prepended (e.g. "apfel" → "der Apfel", "buch" → "das Buch", "frau" → "die Frau", "tisch" → "der Tisch").
 - VERBS: Must be in standard lowercase infinitive form (e.g. "gehn" → "gehen", "fahrem" → "fahren").
-- ADJECTIVES / ADVERBS: Must be in standard lowercase with correct umlauts (e.g. "schon" → "schön", "heflich" → "höflich").
+- ADJECTIVES / ADVERBS: Must be standard lowercase with correct umlauts (e.g. "schon" → "schön", "heflich" → "höflich").
 
-2. ACCURATE ENGLISH MEANINGS (NEVER GERMAN):
-- The "meaning" field MUST ALWAYS be an accurate ENGLISH translation.
-- NEVER return the German word itself as the meaning! (e.g. "geben" -> "to give", NOT "geben"; "gratulieren" -> "to congratulate", NOT "gratulieren"; "gefallen" -> "to please, to like", NOT "gefallen"; "gehören" -> "to belong to", NOT "gehören").
+2. AUTHENTIC ENGLISH MEANINGS (NEVER GERMAN, NEVER PSEUDO-ENGLISH STEMS):
+- The "meaning" field MUST ALWAYS be an accurate, natural ENGLISH translation.
+- NEVER return the German word itself as the meaning!
+- NEVER create fake stem translations by simply prepending "to" to a German verb stem!
+  * "danken" -> "to thank" (ABSOLUTELY NEVER "to dank"!)
+  * "heißen" -> "to be called, to be named, to mean" (ABSOLUTELY NEVER "to heiß"!)
+  * "bekommen" -> "to get, to receive" (ABSOLUTELY NEVER "to become"!)
+  * "folgen" -> "to follow" (ABSOLUTELY NEVER "to folg"!)
+  * "geben" -> "to give" (ABSOLUTELY NEVER "geben" or "to geb"!)
+  * "gefallen" -> "to please, to like" (ABSOLUTELY NEVER "gefallen"!)
 
-3. GENDER RULES:
+3. CONVERSATIONAL EXPRESSIONS, PHRASES & IDIOMS:
+- Fixed expressions like "es geht", "wie geht's", "es gibt", "auf Wiedersehen", "guten Tag":
+  * "part_of_speech" MUST BE "other" or "phrase", NEVER "adjective"!
+  * "meaning" MUST BE genuine English (e.g. "es geht" -> "so-so, it is okay, doing fine"; "es gibt" -> "there is, there are").
+  * "example_sentence" MUST BE a natural contextual dialogue (e.g. for "es geht": "Wie geht es dir? – Es geht, danke.").
+
+4. GENDER RULES:
 - ONLY nouns have a gender ("masculine" | "feminine" | "neuter").
-- For all verbs, adjectives, adverbs, prepositions, conjunctions, and other parts of speech, "gender" MUST BE null. NEVER assign a gender to a verb! (e.g. "versprechen" is a verb, so its gender MUST be null).
+- For verbs, phrases, adjectives, adverbs, prepositions, conjunctions, and pronouns, "gender" MUST BE null. NEVER assign a gender to a verb or phrase!
 
-4. REALISTIC EXAMPLES:
+5. REALISTIC USAGE EXAMPLES:
 - "example_sentence" must be an authentic, natural German sentence showing real everyday usage.
-- NEVER output generic placeholders like "Wir [word] zusammen" or "Das ist sehr [word]".
+- NEVER output generic placeholders like "Wir [word] zusammen" or "Das ist [word]." or "Ich möchte gerne [word]."
 
-5. 1-TO-1 OUTPUT GUARANTEE (NO DROPPED WORDS):
+6. 1-TO-1 OUTPUT GUARANTEE (NO DROPPED WORDS):
 - You MUST return EXACTLY one entry in the "words" array for EVERY numbered input item provided by the user, in the exact same order.
-- NEVER merge, skip, or omit ANY word from the input list!
+- NEVER merge, skip, or omit ANY word!
 
 Output JSON format:
 {
@@ -196,8 +301,9 @@ Output JSON format:
 export function fallbackEnrichWord(rawWord: string): EnrichedWord {
   const trimmed = rawWord.trim();
   const cleanWord = trimmed.replace(/^(der|die|das)\s+/i, '').trim().toLowerCase();
-  const dictEntry = lookupWord(cleanWord);
 
+  // 1. Direct dictionary lookup (now covers hundreds of Goethe A1/A2 words and idioms)
+  const dictEntry = lookupWord(cleanWord) || lookupWord(trimmed);
   if (dictEntry) {
     const word = dictEntry.canonicalWord || trimmed;
     return {
@@ -217,8 +323,34 @@ export function fallbackEnrichWord(rawWord: string): EnrichedWord {
     };
   }
 
+  // 2. Fixed phrases / idioms check
+  if (cleanWord === 'es geht' || trimmed.toLowerCase() === 'es geht') {
+    return {
+      word: 'es geht',
+      part_of_speech: 'other',
+      gender: null,
+      plural_form: null,
+      conjugation: {
+        ich: 'gehe',
+        du: 'gehst',
+        er: 'geht',
+        wir: 'gehen',
+        ihr: 'geht',
+        sie: 'gehen',
+      },
+      meaning: 'so-so, it is okay, doing fine',
+      cefr_level: 'A1',
+      example_sentence: 'Wie geht es dir? – Es geht, danke der Nachfrage.',
+      verb_type: 'irregular',
+      auxiliary_type: 'sein',
+      present_form: 'geht',
+      simple_past: 'ging',
+      perfect_form: 'ist gegangen',
+    };
+  }
+
   let word = trimmed;
-  let partOfSpeech: 'noun' | 'verb' | 'adjective' | 'adverb' | 'preposition' | 'conjunction' | 'pronoun' | 'article' | 'other' = 'other';
+  let partOfSpeech: EnrichedWord['part_of_speech'] = 'other';
   let gender: 'masculine' | 'feminine' | 'neuter' | null = null;
   const pluralForm: string | null = null;
   let meaning = '';
@@ -260,14 +392,15 @@ export function fallbackEnrichWord(rawWord: string): EnrichedWord {
     exampleSentence = `Das ist ${gender === 'masculine' ? 'ein' : gender === 'feminine' ? 'eine' : 'ein'} ${trimmed}.`;
   } else if (trimmed.endsWith('en') || trimmed.endsWith('eln') || trimmed.endsWith('ern')) {
     partOfSpeech = 'verb';
-    gender = null; // Verbs NEVER have a gender
+    gender = null;
     const stem = trimmed.endsWith('en') ? trimmed.slice(0, -2) : trimmed.slice(0, -1);
     verbType = 'regular';
     auxiliaryType = 'haben';
     presentForm = `${stem}t`;
     simplePast = `${stem}te`;
     perfectForm = `hat ge${stem}t`;
-    meaning = `to ${stem}`;
+    // Clean meaning without naive stem chopping
+    meaning = `to (verb) – ${trimmed}`;
     conjugation = {
       ich: `${stem}e`,
       du: `${stem}st`,
@@ -276,7 +409,13 @@ export function fallbackEnrichWord(rawWord: string): EnrichedWord {
       ihr: `${stem}t`,
       sie: `${stem}en`,
     };
-    exampleSentence = `Ich möchte gerne ${trimmed}.`;
+    exampleSentence = `Wir müssen heute ${trimmed}.`;
+  } else if (trimmed.includes(' ')) {
+    // Multi-word phrase or idiom: NEVER classify as adjective!
+    partOfSpeech = 'other';
+    gender = null;
+    meaning = 'expression / phrase';
+    exampleSentence = `Wir verwenden den Ausdruck: "${trimmed}".`;
   } else {
     partOfSpeech = 'adjective';
     gender = null;
@@ -304,45 +443,60 @@ export function fallbackEnrichWord(rawWord: string): EnrichedWord {
 function sanitizeEnrichedItem(item: Record<string, unknown>): void {
   if (!item || typeof item !== 'object') return;
 
-  // 1. Enforce gender = null and plural_form = null on all non-nouns (e.g. versprechen is a verb)
+  // 1. Enforce gender = null and plural_form = null on all non-nouns
   const pos = String(item.part_of_speech || '').toLowerCase().trim();
   if (pos !== 'noun') {
     item.gender = null;
     item.plural_form = null;
   }
 
-  // 2. Fix identical or empty meaning
+  // 2. Fix identical, empty, or naive fake stem meanings (e.g. "to dank", "to heiß", "es geht")
   const rawWord = String(item.word || '').trim();
   const cleanWord = rawWord.replace(/^(der|die|das)\s+/i, '').trim().toLowerCase();
   const rawMeaning = String(item.meaning || '').trim().toLowerCase();
 
-  if (!rawMeaning || rawMeaning === cleanWord || rawMeaning === rawWord.toLowerCase()) {
-    const dict = lookupWord(cleanWord);
+  const isMeaningCorrupted =
+    !rawMeaning ||
+    rawMeaning === cleanWord ||
+    rawMeaning === rawWord.toLowerCase() ||
+    rawMeaning === 'to dank' ||
+    rawMeaning === 'to heiß' ||
+    rawMeaning === 'to heiss' ||
+    (rawMeaning.startsWith('to ') && rawMeaning.slice(3).trim() === (cleanWord.endsWith('en') ? cleanWord.slice(0, -2) : '')) ||
+    (cleanWord === 'es geht' && (rawMeaning === 'es geht' || pos === 'adjective'));
+
+  if (isMeaningCorrupted) {
+    const dict = lookupWord(cleanWord) || lookupWord(rawWord);
     if (dict) {
       item.meaning = dict.meaning;
       if (dict.partOfSpeech) item.part_of_speech = dict.partOfSpeech;
-      if (!item.example_sentence || String(item.example_sentence).includes('zusammen.')) {
+      if (!item.example_sentence || String(item.example_sentence).includes('Das ist ') || String(item.example_sentence).includes('Ich möchte gerne ')) {
         item.example_sentence = dict.exampleSentence;
       }
-    } else if (pos === 'verb') {
-      const stem = cleanWord.endsWith('en') ? cleanWord.slice(0, -2) : cleanWord;
-      item.meaning = `to ${stem}`;
     }
   }
 
   // 3. Fix placeholder example sentences
   if (
     typeof item.example_sentence === 'string' &&
-    (item.example_sentence.includes('zusammen.') || item.example_sentence.includes('Das ist sehr'))
+    (
+      item.example_sentence.includes('zusammen.') ||
+      item.example_sentence.includes('Das ist sehr') ||
+      item.example_sentence.startsWith(`Das ist ${rawWord}`) ||
+      item.example_sentence.startsWith(`Das ist ${cleanWord}`) ||
+      item.example_sentence.startsWith(`Ich möchte gerne ${rawWord}`) ||
+      item.example_sentence.startsWith(`Ich möchte gerne ${cleanWord}`) ||
+      item.example_sentence.includes('Das ist es geht')
+    )
   ) {
-    const dict = lookupWord(cleanWord);
+    const dict = lookupWord(cleanWord) || lookupWord(rawWord);
     if (dict?.exampleSentence) {
       item.example_sentence = dict.exampleSentence;
     }
   }
 
   // 4. Ensure spelling correction and noun articles from dictionary canonical forms
-  const dictMatch = lookupWord(cleanWord);
+  const dictMatch = lookupWord(cleanWord) || lookupWord(rawWord);
   if (dictMatch?.canonicalWord) {
     if (pos === 'noun' || dictMatch.partOfSpeech === 'noun') {
       item.word = dictMatch.canonicalWord;
@@ -357,7 +511,7 @@ function sanitizeEnrichedItem(item: Record<string, unknown>): void {
 
 function parseEnrichWordResponse(raw: string | null | undefined): EnrichedWord[] {
   if (!raw) {
-    console.error('[Gemini:enrichWords] Empty raw response');
+    console.error('[AI:enrichWords] Empty raw response');
     return [];
   }
 
@@ -368,7 +522,7 @@ function parseEnrichWordResponse(raw: string | null | undefined): EnrichedWord[]
       (Array.isArray(parsed) ? parsed : null);
 
     if (!wordsArray || !Array.isArray(wordsArray)) {
-      console.error('[Gemini:enrichWords] No words array found. Keys:', Object.keys(parsed));
+      console.error('[AI:enrichWords] No words array found. Keys:', Object.keys(parsed));
       return [];
     }
 
@@ -382,19 +536,19 @@ function parseEnrichWordResponse(raw: string | null | undefined): EnrichedWord[]
       return batchResult.data.words;
     }
 
-    console.warn('[Gemini:enrichWords] Batch validation failed, salvaging individual words...');
+    console.warn('[AI:enrichWords] Batch validation failed, salvaging individual words...');
     const salvaged: EnrichedWord[] = [];
     for (const item of wordsArray) {
       const single = enrichedWordSchema.safeParse(item);
       if (single.success) {
         salvaged.push(single.data);
       } else {
-        console.error('[Gemini:enrichWords] Skipped word issue:', single.error.issues);
+        console.error('[AI:enrichWords] Skipped word issue:', single.error.issues);
       }
     }
     return salvaged;
   } catch (err) {
-    console.error('[Gemini:enrichWords] JSON parse error:', err, 'Raw response:', raw.slice(0, 300));
+    console.error('[AI:enrichWords] JSON parse error:', err, 'Raw response:', raw.slice(0, 300));
     return [];
   }
 }
@@ -427,7 +581,7 @@ function reconcileWordBatch(words: string[], parsed: EnrichedWord[]): EnrichedWo
       usedIndices.add(matchIdx);
       result.push(parsed[matchIdx]);
     } else {
-      console.warn(`[Gemini:reconcileWordBatch] Word "${rawWord}" was missing from AI output, applying dictionary/fallback`);
+      console.warn(`[AI:reconcileWordBatch] Word "${rawWord}" was missing from AI output, applying dictionary/fallback`);
       result.push(fallbackEnrichWord(rawWord));
     }
   }
@@ -436,30 +590,52 @@ function reconcileWordBatch(words: string[], parsed: EnrichedWord[]): EnrichedWo
 }
 
 async function enrichWordBatch(words: string[]): Promise<EnrichedWord[]> {
-  try {
-    const listPrompt = words.map((w, i) => `${i + 1}. ${w}`).join('\n');
-    const prompt = `Provide linguistic data with spelling corrections for each of these German words/phrases (return exactly ${words.length} items, one per numbered entry in the same order):\n${listPrompt}`;
+  const listPrompt = words.map((w, i) => `${i + 1}. ${w}`).join('\n');
+  const prompt = `Provide linguistic data with spelling corrections for each of these German words/phrases (return exactly ${words.length} items, one per numbered entry in the same order):\n${listPrompt}`;
 
-    const rawResponse = await callGemini({
-      systemInstruction: ENRICH_WORD_SYSTEM_PROMPT,
-      prompt,
-      temperature: 0.2,
-      responseMimeType: 'application/json',
-    });
+  // 1. Primary AI: Google Gemini premier model cascade (gemini-3.8-flash, etc.)
+  if (isGeminiConfigured()) {
+    try {
+      const rawResponse = await callGemini({
+        systemInstruction: ENRICH_WORD_SYSTEM_PROMPT,
+        prompt,
+        temperature: 0.1,
+        responseMimeType: 'application/json',
+      });
 
-    const parsed = parseEnrichWordResponse(rawResponse);
-    if (parsed.length > 0) {
-      return reconcileWordBatch(words, parsed);
+      const parsed = parseEnrichWordResponse(rawResponse);
+      if (parsed.length > 0) {
+        return reconcileWordBatch(words, parsed);
+      }
+    } catch (err) {
+      console.warn('[AI:enrichWordBatch] Gemini call failed, trying Groq fallback:', err);
     }
-  } catch (err) {
-    console.warn('[Gemini:enrichWordBatch] Call failed, using local fallback:', err);
   }
 
+  // 2. Secondary AI: Groq high-tier model cascade (120B / 27B)
+  if (getGroqApiKey()) {
+    try {
+      const rawGroq = await callGroqFallback({
+        systemInstruction: ENRICH_WORD_SYSTEM_PROMPT,
+        prompt,
+        temperature: 0.1,
+      });
+
+      const parsedGroq = parseEnrichWordResponse(rawGroq);
+      if (parsedGroq.length > 0) {
+        return reconcileWordBatch(words, parsedGroq);
+      }
+    } catch (groqErr) {
+      console.warn('[AI:enrichWordBatch] Groq fallback failed:', groqErr);
+    }
+  }
+
+  // 3. Tertiary: Local dictionary fallback (with 300+ Goethe words)
   return words.map(fallbackEnrichWord);
 }
 
 /**
- * Enriches German words with Gemini AI (gender, articles, CEFR level, conjugations, examples).
+ * Enriches German words with premier AI models (gender, articles, CEFR level, conjugations, examples).
  */
 export async function enrichWordsWithGemini(words: string[]): Promise<EnrichedWord[]> {
   if (words.length === 0) return [];
@@ -473,7 +649,7 @@ export async function enrichWordsWithGemini(words: string[]): Promise<EnrichedWo
     chunks.push(words.slice(i, i + BATCH_SIZE));
   }
 
-  console.log(`[Gemini:enrichWords] Processing ${words.length} words across ${chunks.length} batches`);
+  console.log(`[AI:enrichWords] Processing ${words.length} words across ${chunks.length} batches`);
   const allResults: EnrichedWord[] = [];
 
   for (let i = 0; i < chunks.length; i += MAX_CONCURRENT_BATCHES) {
@@ -495,7 +671,7 @@ export async function enrichWordsWithGemini(words: string[]): Promise<EnrichedWo
     }
   }
 
-  console.log(`[Gemini:enrichWords] Enriched ${allResults.length}/${words.length} words`);
+  console.log(`[AI:enrichWords] Enriched ${allResults.length}/${words.length} words`);
   return allResults;
 }
 
@@ -534,13 +710,16 @@ export function fallbackEnrichExpression(rawExpr: string): EnrichedExpression {
   else if (/bitte|danke|verzeihung|entschuldig/i.test(lower)) category = 'polite';
   else if (/daumen|schwein|blau|bahnhof|tomaten/i.test(lower)) category = 'idiom';
 
+  // Check dictionary
+  const dict = lookupWord(trimmed);
+
   return {
     expression: trimmed,
-    meaning: trimmed,
+    meaning: dict?.meaning ?? trimmed,
     literal_translation: null,
     register: 'neutral',
-    cefr_level: 'A1',
-    example_sentence: `Wir verwenden den Ausdruck: "${trimmed}".`,
+    cefr_level: dict?.cefrLevel ?? 'A1',
+    example_sentence: dict?.exampleSentence ?? `Wir verwenden den Ausdruck: "${trimmed}".`,
     usage_note: null,
     category,
   };
@@ -573,29 +752,50 @@ function parseEnrichExpressionResponse(raw: string | null | undefined): Enriched
     }
     return salvaged;
   } catch (err) {
-    console.error('[Gemini:enrichExpressions] Parse error:', err);
+    console.error('[AI:enrichExpressions] Parse error:', err);
     return [];
   }
 }
 
 async function enrichExpressionBatch(expressions: string[]): Promise<EnrichedExpression[]> {
-  try {
-    const listPrompt = expressions.map((e, i) => `${i + 1}. ${e}`).join('\n');
-    const prompt = `Provide linguistic data for each of these German fixed expressions (one entry per item):\n${listPrompt}`;
+  const listPrompt = expressions.map((e, i) => `${i + 1}. ${e}`).join('\n');
+  const prompt = `Provide linguistic data for each of these German fixed expressions (one entry per item):\n${listPrompt}`;
 
-    const rawResponse = await callGemini({
-      systemInstruction: ENRICH_EXPRESSION_SYSTEM_PROMPT,
-      prompt,
-      temperature: 0.2,
-      responseMimeType: 'application/json',
-    });
+  // 1. Primary AI: Gemini
+  if (isGeminiConfigured()) {
+    try {
+      const rawResponse = await callGemini({
+        systemInstruction: ENRICH_EXPRESSION_SYSTEM_PROMPT,
+        prompt,
+        temperature: 0.1,
+        responseMimeType: 'application/json',
+      });
 
-    const parsed = parseEnrichExpressionResponse(rawResponse);
-    if (parsed.length > 0) {
-      return parsed;
+      const parsed = parseEnrichExpressionResponse(rawResponse);
+      if (parsed.length > 0) {
+        return parsed;
+      }
+    } catch (err) {
+      console.warn('[AI:enrichExpressionBatch] Gemini failed, trying Groq fallback:', err);
     }
-  } catch (err) {
-    console.warn('[Gemini:enrichExpressionBatch] Call failed, using local fallback:', err);
+  }
+
+  // 2. Secondary AI: Groq
+  if (getGroqApiKey()) {
+    try {
+      const rawGroq = await callGroqFallback({
+        systemInstruction: ENRICH_EXPRESSION_SYSTEM_PROMPT,
+        prompt,
+        temperature: 0.1,
+      });
+
+      const parsedGroq = parseEnrichExpressionResponse(rawGroq);
+      if (parsedGroq.length > 0) {
+        return parsedGroq;
+      }
+    } catch (groqErr) {
+      console.warn('[AI:enrichExpressionBatch] Groq failed:', groqErr);
+    }
   }
 
   return expressions.map(fallbackEnrichExpression);

@@ -4,7 +4,7 @@ import { userWords, wordBatches } from '@/lib/schema';
 import { eq, and, sql } from 'drizzle-orm';
 import { getSession } from '@/lib/auth';
 import { enrichWordsWithGemini } from '@/lib/gemini';
-import { parseAndCleanWords, normalizeWord } from '@/lib/word-parser';
+import { parseAndCleanWords, normalizeWord, isCorruptedWordData } from '@/lib/word-parser';
 
 export const maxDuration = 60;
 
@@ -69,7 +69,7 @@ export async function POST(
     const libraryByRoot = new Map<string, typeof allUserWords[0]>();
     for (const row of allUserWords) {
       const root = normalizeWord(row.word);
-      if (!libraryByRoot.has(root) && row.meaning && normalizeWord(row.meaning) !== root) {
+      if (!libraryByRoot.has(root) && !isCorruptedWordData(row.word, row.meaning, row.exampleSentence, row.partOfSpeech)) {
         libraryByRoot.set(root, row);
       }
     }

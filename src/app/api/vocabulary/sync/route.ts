@@ -5,11 +5,11 @@ import { eq, and, inArray, InferSelectModel } from 'drizzle-orm';
 import { getSession } from '@/lib/auth';
 import { enrichWordsWithGemini } from '@/lib/gemini';
 import { lookupWord } from '@/lib/dictionary-data';
-import { normalizeWord } from '@/lib/word-parser';
+import { normalizeWord, isCorruptedWordData } from '@/lib/word-parser';
 
 type UserWordRow = InferSelectModel<typeof userWords>;
 
-// POST /api/vocabulary/sync - Synchronize and deduplicate vocabulary & word sets
+// POST /api/vocabulary/sync - Synchronize, deduplicate and heal damaged vocabulary
 export async function POST() {
   try {
     const session = await getSession();
@@ -101,54 +101,58 @@ export async function POST() {
         .where(and(eq(userWords.userId, session.id), inArray(userWords.id, removedIds)));
     }
 
-    // Auto-repair any damaged words (e.g. self-referential meanings, dummy sentences, non-noun genders)
+    // Auto-repair any damaged words (e.g. naive stem translations, self-referential meanings, dummy sentences)
     let totalRepairedWords = 0;
+    const wordsToHealViaAi: UserWordRow[] = [];
+
     for (const w of allWords) {
       if (removedIds.includes(w.id)) continue;
 
       const cleanWord = normalizeWord(w.word);
       const rawWord = w.word.trim().toLowerCase();
-      const rawMeaning = (w.meaning || '').trim().toLowerCase();
+      const corrupted = isCorruptedWordData(w.word, w.meaning, w.exampleSentence, w.partOfSpeech);
 
-      const isMeaningSelfReferential = !rawMeaning || rawMeaning === cleanWord || rawMeaning === rawWord;
-      const isDummySentence = !w.exampleSentence || w.exampleSentence.includes('zusammen.') || w.exampleSentence.includes('Ich lerne das Wort');
-      const isNonNounWithGender = w.partOfSpeech && w.partOfSpeech.toLowerCase() !== 'noun' && !!w.gender;
-
-      if (isMeaningSelfReferential || isDummySentence || isNonNounWithGender) {
+      if (corrupted) {
         const dict = lookupWord(cleanWord) || lookupWord(rawWord);
-        let updatedMeaning = w.meaning;
-        let updatedExample = w.exampleSentence;
-        let updatedPos = w.partOfSpeech;
-        let updatedGender = (w.partOfSpeech && w.partOfSpeech.toLowerCase() !== 'noun') ? null : w.gender;
-
         if (dict) {
-          if (isMeaningSelfReferential || dict.meaning) updatedMeaning = dict.meaning;
-          if (isDummySentence && dict.exampleSentence) updatedExample = dict.exampleSentence;
-          if (dict.partOfSpeech) updatedPos = dict.partOfSpeech;
-          if (dict.partOfSpeech !== 'noun') updatedGender = null;
-          else if (dict.gender) updatedGender = dict.gender;
-        } else if (isMeaningSelfReferential && w.partOfSpeech?.toLowerCase() === 'verb') {
-          const stem = cleanWord.endsWith('en') ? cleanWord.slice(0, -2) : cleanWord;
-          updatedMeaning = `to ${stem}`;
-        }
-
-        if (
-          updatedMeaning !== w.meaning ||
-          updatedExample !== w.exampleSentence ||
-          updatedGender !== w.gender ||
-          updatedPos !== w.partOfSpeech
-        ) {
           await db
             .update(userWords)
             .set({
-              meaning: updatedMeaning,
-              exampleSentence: updatedExample,
-              gender: updatedGender,
-              partOfSpeech: updatedPos,
+              meaning: dict.meaning,
+              exampleSentence: dict.exampleSentence ?? w.exampleSentence,
+              gender: dict.partOfSpeech === 'noun' ? (dict.gender ?? null) : null,
+              partOfSpeech: dict.partOfSpeech || w.partOfSpeech,
             })
             .where(eq(userWords.id, w.id));
           totalRepairedWords++;
+        } else {
+          wordsToHealViaAi.push(w);
         }
+      }
+    }
+
+    // Heal remaining words via AI in batches
+    if (wordsToHealViaAi.length > 0) {
+      try {
+        const aiResults = await enrichWordsWithGemini(wordsToHealViaAi.map((w) => w.word));
+        for (let i = 0; i < wordsToHealViaAi.length; i++) {
+          const target = wordsToHealViaAi[i];
+          const enriched = aiResults[i];
+          if (enriched && enriched.meaning && !isCorruptedWordData(target.word, enriched.meaning, enriched.example_sentence, enriched.part_of_speech)) {
+            await db
+              .update(userWords)
+              .set({
+                meaning: enriched.meaning,
+                exampleSentence: enriched.example_sentence ?? target.exampleSentence,
+                gender: enriched.part_of_speech === 'noun' ? (enriched.gender ?? null) : null,
+                partOfSpeech: enriched.part_of_speech,
+              })
+              .where(eq(userWords.id, target.id));
+            totalRepairedWords++;
+          }
+        }
+      } catch (aiErr) {
+        console.warn('[Sync] AI healing batch error:', aiErr);
       }
     }
 

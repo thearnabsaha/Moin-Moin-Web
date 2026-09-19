@@ -108,3 +108,48 @@ export function parseAndCleanWords(input: string): string[] {
 
   return Array.from(seenRoots.values()).map((v) => v.word);
 }
+
+/**
+ * Validates if an existing vocabulary item in the database has valid linguistic data,
+ * or if it was corrupted by a past naive fallback (e.g. "to dank", "to heiß", "es geht" as adjective).
+ */
+export function isCorruptedWordData(
+  word: string,
+  meaning?: string | null,
+  exampleSentence?: string | null,
+  partOfSpeech?: string | null
+): boolean {
+  if (!meaning || !meaning.trim()) return true;
+  const m = meaning.trim().toLowerCase();
+  const w = word.trim().toLowerCase();
+  const cleanW = w.replace(/^(der|die|das)\s+/i, '').trim();
+
+  // 1. Meaning equals the word itself (excluding true German-English cognates like hand, finger, arm, oh, sing)
+  const COGNATES = new Set(['hand', 'finger', 'arm', 'ball', 'bus', 'hotel', 'park', 'radio', 'taxi', 'film', 'baby', 'start', 'stop', 'test', 'winter', 'super', 'gras', 'wind', 'ring', 'gold', 'glas', 'wolf', 'rose', 'tiger', 'oh', 'sing']);
+  if ((m === w || m === cleanW) && !COGNATES.has(cleanW)) return true;
+
+  // 2. Known naive stem strings
+  if (m === 'to dank' || m === 'to heiß' || m === 'to heiss') return true;
+
+  // 3. Naive "to <german_stem>" fallback patterns
+  if (m.startsWith('to ')) {
+    const stem = cleanW.endsWith('en') ? cleanW.slice(0, -2) : cleanW.endsWith('eln') || cleanW.endsWith('ern') ? cleanW.slice(0, -1) : cleanW;
+    const meaningWord = m.slice(3).trim();
+    if ((meaningWord === stem || meaningWord === cleanW) && !COGNATES.has(stem) && !COGNATES.has(meaningWord)) return true;
+  }
+
+  // 4. "es geht" misclassified as adjective or meaning "es geht"
+  if (cleanW === 'es geht' && (m === 'es geht' || partOfSpeech === 'adjective')) {
+    return true;
+  }
+
+  // 5. Fallback dummy sentences
+  if (exampleSentence) {
+    if (exampleSentence === `Das ist ${w}.` || exampleSentence === `Das ist ${cleanW}.`) return true;
+    if (exampleSentence === `Ich möchte gerne ${w}.` || exampleSentence === `Ich möchte gerne ${cleanW}.`) return true;
+    if (exampleSentence.includes('„Das ist es geht.“') || exampleSentence.includes('Das ist es geht')) return true;
+    if (exampleSentence.includes('Ich möchte gerne danken') || exampleSentence.includes('Ich möchte gerne heißen')) return true;
+  }
+
+  return false;
+}

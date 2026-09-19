@@ -4,7 +4,7 @@ import { db } from '@/lib/db';
 import { userWords, wordBatches } from '@/lib/schema';
 import { enrichWordsWithGemini } from '@/lib/gemini';
 import { getCurrentUserId } from '@/lib/get-user';
-import { parseAndCleanWords, normalizeWord } from '@/lib/word-parser';
+import { parseAndCleanWords, normalizeWord, isCorruptedWordData } from '@/lib/word-parser';
 
 export const maxDuration = 60;
 
@@ -30,7 +30,7 @@ export async function POST(request: NextRequest) {
     const existingByRoot = new Map<string, typeof existingRows[0]>();
     for (const row of existingRows) {
       const root = normalizeWord(row.word);
-      if (!existingByRoot.has(root) && row.meaning && normalizeWord(row.meaning) !== root) {
+      if (!existingByRoot.has(root) && !isCorruptedWordData(row.word, row.meaning, row.exampleSentence, row.partOfSpeech)) {
         existingByRoot.set(root, row);
       }
     }
