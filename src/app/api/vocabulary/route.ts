@@ -77,6 +77,9 @@ export async function GET() {
       conjugation?: Record<string, string> | null;
     }> = [];
 
+    // Collect corrupted words not fixable by dictionary — these need AI enrichment
+    const wordsNeedingAiHeal: Array<{ id: string; word: string }> = [];
+
     const rows = Array.from(uniqueWordMap.values()).map((row) => {
       if (isCorruptedWordData(row.word, row.meaning, row.exampleSentence, row.partOfSpeech)) {
         const clean = normalizeWord(row.word);
@@ -102,11 +105,15 @@ export async function GET() {
             perfectForm: dict.perfectForm ?? row.perfectForm,
             conjugation: dict.conjugation ?? (row.conjugation as Record<string, string> | null),
           });
+        } else {
+          // Dictionary doesn't have it — queue for AI healing in background
+          wordsNeedingAiHeal.push({ id: row.id, word: row.word });
         }
       }
       return row;
     });
 
+    // Persist dictionary-based heals in background
     if (rowsToHealInDb.length > 0) {
       Promise.all(
         rowsToHealInDb.map((item) =>
@@ -124,7 +131,49 @@ export async function GET() {
             })
             .where(eq(userWords.id, item.id))
         )
-      ).catch((err) => console.error('[GET Vocab Auto-heal error]:', err));
+      ).catch((err) => console.error('[GET Vocab Auto-heal dict error]:', err));
+    }
+
+    // Fire-and-forget AI enrichment for words that dictionary couldn't fix
+    // These get proper meanings on the NEXT page load
+    if (wordsNeedingAiHeal.length > 0) {
+      const wordTexts = wordsNeedingAiHeal.map((w) => w.word);
+      console.log(`[GET Vocab AI-heal] Enriching ${wordTexts.length} corrupted word(s) in background:`, wordTexts);
+      enrichWordsWithGemini(wordTexts)
+        .then(async (enriched) => {
+          const updates: Promise<unknown>[] = [];
+          for (let i = 0; i < enriched.length && i < wordsNeedingAiHeal.length; i++) {
+            const e = enriched[i];
+            const target = wordsNeedingAiHeal[i];
+            // Only update if AI actually produced a non-corrupted meaning
+            if (e && e.meaning && !isCorruptedWordData(e.word, e.meaning, e.example_sentence, e.part_of_speech)) {
+              updates.push(
+                db
+                  .update(userWords)
+                  .set({
+                    meaning: e.meaning,
+                    exampleSentence: e.example_sentence ?? null,
+                    partOfSpeech: e.part_of_speech,
+                    gender: e.part_of_speech === 'noun' ? (e.gender ?? null) : null,
+                    pluralForm: e.plural_form ?? null,
+                    conjugation: e.conjugation ?? null,
+                    cefrLevel: e.cefr_level ?? 'A1',
+                    verbType: e.verb_type ?? null,
+                    auxiliaryType: e.auxiliary_type ?? null,
+                    presentForm: e.present_form ?? null,
+                    simplePast: e.simple_past ?? null,
+                    perfectForm: e.perfect_form ?? null,
+                  })
+                  .where(eq(userWords.id, target.id))
+              );
+            }
+          }
+          if (updates.length > 0) {
+            await Promise.all(updates);
+            console.log(`[GET Vocab AI-heal] Successfully healed ${updates.length} word(s)`);
+          }
+        })
+        .catch((err) => console.error('[GET Vocab AI-heal error]:', err));
     }
 
     const analytics: Analytics = {
@@ -369,6 +418,47 @@ export async function POST(request: NextRequest) {
     }
     console.error('Vocabulary POST error:', error);
     return NextResponse.json({ error: 'Failed to add words' }, { status: 500 });
+  }
+}
+
+// PATCH /api/vocabulary - Edit word meaning and details
+export async function PATCH(request: NextRequest) {
+  try {
+    const userId = await getCurrentUserId();
+    const body = await request.json();
+    const { id, meaning, exampleSentence } = body;
+
+    if (!id || typeof id !== 'string') {
+      return NextResponse.json({ error: 'Missing word id' }, { status: 400 });
+    }
+    if (!meaning || typeof meaning !== 'string' || !meaning.trim()) {
+      return NextResponse.json({ error: 'Meaning cannot be empty' }, { status: 400 });
+    }
+
+    const updateData: { meaning: string; exampleSentence?: string | null } = {
+      meaning: meaning.trim(),
+    };
+    if (exampleSentence !== undefined) {
+      updateData.exampleSentence = typeof exampleSentence === 'string' ? exampleSentence.trim() || null : null;
+    }
+
+    const [updated] = await db
+      .update(userWords)
+      .set(updateData)
+      .where(and(eq(userWords.id, id), eq(userWords.userId, userId)))
+      .returning();
+
+    if (!updated) {
+      return NextResponse.json({ error: 'Word not found' }, { status: 404 });
+    }
+
+    return NextResponse.json({ success: true, word: updated });
+  } catch (error) {
+    if (error instanceof Error && error.message === 'Not authenticated') {
+      return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
+    }
+    console.error('Vocabulary PATCH error:', error);
+    return NextResponse.json({ error: 'Failed to update word' }, { status: 500 });
   }
 }
 

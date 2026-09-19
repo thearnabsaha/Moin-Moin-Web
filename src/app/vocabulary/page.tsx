@@ -102,6 +102,18 @@ export default function VocabularyPage() {
   const [posFilter, setPosFilter] = useState('all');
   const [searchQuery, setSearchQuery] = useState('');
 
+  // Word Editing State (library)
+  const [editingWordId, setEditingWordId] = useState<string | null>(null);
+  const [editMeaning, setEditMeaning] = useState('');
+  const [editSentence, setEditSentence] = useState('');
+  const [savingWord, setSavingWord] = useState(false);
+
+  // Word Editing State (set inspector)
+  const [editingSetWordKey, setEditingSetWordKey] = useState<string | null>(null); // "setId:wordId"
+  const [editSetWordMeaning, setEditSetWordMeaning] = useState('');
+  const [editSetWordSentence, setEditSetWordSentence] = useState('');
+  const [savingSetWord, setSavingSetWord] = useState(false);
+
   // Pronounce TTS
   const speak = useCallback((text: string) => {
     if (typeof window === 'undefined' || !('speechSynthesis' in window)) return;
@@ -331,6 +343,49 @@ export default function VocabularyPage() {
     } catch {
       toast.error('Failed to remove word');
     }
+  };
+
+  // Save Edited Word (General Library)
+  const handleSaveWordEdit = async (wordId: string) => {
+    if (!editMeaning.trim()) { toast.error('Meaning cannot be empty'); return; }
+    setSavingWord(true);
+    try {
+      const res = await fetch('/api/vocabulary', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: wordId, meaning: editMeaning.trim(), exampleSentence: editSentence.trim() || null }),
+      });
+      const data = await res.json();
+      if (!res.ok) { toast.error(data.error || 'Failed to save'); return; }
+      toast.success('Word updated!');
+      setEditingWordId(null);
+      setEditMeaning('');
+      setEditSentence('');
+      await fetchWords();
+    } catch { toast.error('Failed to save word'); }
+    finally { setSavingWord(false); }
+  };
+
+  // Save Edited Word (Set Inspector)
+  const handleSaveSetWordEdit = async (setId: string, wordId: string) => {
+    if (!editSetWordMeaning.trim()) { toast.error('Meaning cannot be empty'); return; }
+    setSavingSetWord(true);
+    try {
+      const res = await fetch(`/api/vocabulary/sets/${setId}/words/${wordId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ meaning: editSetWordMeaning.trim(), exampleSentence: editSetWordSentence.trim() || null }),
+      });
+      const data = await res.json();
+      if (!res.ok) { toast.error(data.error || 'Failed to save'); return; }
+      toast.success('Word updated!');
+      setEditingSetWordKey(null);
+      setEditSetWordMeaning('');
+      setEditSetWordSentence('');
+      await fetchSets();
+      await fetchWords();
+    } catch { toast.error('Failed to save word'); }
+    finally { setSavingSetWord(false); }
   };
 
   // Delete Word from General Library
@@ -759,34 +814,96 @@ export default function VocabularyPage() {
                                 <p className="text-[11px] font-black uppercase tracking-wider text-[var(--text-tertiary)]">
                                   Words in this set ({set.words.length}):
                                 </p>
-                                {set.words.map((w) => (
-                                  <div
-                                    key={w.id}
-                                    className="flex items-center justify-between rounded-xl bg-[var(--bg-primary)] p-2.5 border border-[var(--border)]"
-                                  >
-                                    <div className="flex items-center gap-2 min-w-0 flex-1">
-                                      <button
-                                        onClick={() => speak(w.word)}
-                                        className="flex h-7 w-7 items-center justify-center rounded-full bg-[var(--accent)]/10 text-[var(--accent)] hover:bg-[var(--accent)]/20 transition-colors"
-                                        title="Speak"
-                                      >
-                                        <Volume2 size={14} />
-                                      </button>
-                                      <div className="min-w-0 flex-1 truncate">
-                                        <span className="font-bold text-xs text-[var(--text-primary)]">{w.word}</span>
-                                        <span className="mx-1.5 text-[var(--text-tertiary)]">·</span>
-                                        <span className="text-xs text-[var(--text-secondary)]">{w.meaning}</span>
-                                      </div>
-                                    </div>
-                                    <button
-                                      onClick={() => handleDeleteWordFromSet(set.id, w.id, w.word)}
-                                      className="flex h-7 w-7 items-center justify-center rounded-lg text-[var(--text-tertiary)] hover:bg-red-500/10 hover:text-red-500 transition-colors"
-                                      title="Remove from set"
+                                {set.words.map((w) => {
+                                  const swKey = `${set.id}:${w.id}`;
+                                  const isEditingSetWord = editingSetWordKey === swKey;
+                                  return (
+                                    <div
+                                      key={w.id}
+                                      className="rounded-xl bg-[var(--bg-primary)] p-2.5 border border-[var(--border)] space-y-2"
                                     >
-                                      <Trash2 size={13} />
-                                    </button>
-                                  </div>
-                                ))}
+                                      <div className="flex items-center justify-between gap-2">
+                                        <div className="flex items-center gap-2 min-w-0 flex-1">
+                                          <button
+                                            onClick={() => speak(w.word)}
+                                            className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full bg-[var(--accent)]/10 text-[var(--accent)] hover:bg-[var(--accent)]/20 transition-colors"
+                                            title="Speak"
+                                          >
+                                            <Volume2 size={14} />
+                                          </button>
+                                          <div className="min-w-0 flex-1">
+                                            <span className="font-bold text-xs text-[var(--text-primary)]">{w.word}</span>
+                                            {!isEditingSetWord && (
+                                              <>
+                                                <span className="mx-1.5 text-[var(--text-tertiary)]">·</span>
+                                                <span className="text-xs text-[var(--text-secondary)]">{w.meaning}</span>
+                                              </>
+                                            )}
+                                          </div>
+                                        </div>
+                                        <div className="flex items-center gap-1">
+                                          {isEditingSetWord ? (
+                                            <>
+                                              <button
+                                                onClick={() => handleSaveSetWordEdit(set.id, w.id)}
+                                                disabled={savingSetWord}
+                                                className="flex h-7 w-7 items-center justify-center rounded-lg bg-[var(--accent)]/15 text-[var(--accent)] hover:bg-[var(--accent)]/30 transition-colors"
+                                                title="Save"
+                                              >
+                                                {savingSetWord ? <Loader2 size={12} className="animate-spin" /> : <Check size={12} />}
+                                              </button>
+                                              <button
+                                                onClick={() => { setEditingSetWordKey(null); setEditSetWordMeaning(''); setEditSetWordSentence(''); }}
+                                                className="flex h-7 w-7 items-center justify-center rounded-lg text-[var(--text-tertiary)] hover:bg-[var(--bg-tertiary)] transition-colors"
+                                                title="Cancel"
+                                              >
+                                                <X size={12} />
+                                              </button>
+                                            </>
+                                          ) : (
+                                            <button
+                                              onClick={() => {
+                                                setEditingSetWordKey(swKey);
+                                                setEditSetWordMeaning(w.meaning || '');
+                                                setEditSetWordSentence(w.exampleSentence || '');
+                                              }}
+                                              className="flex h-7 w-7 items-center justify-center rounded-lg text-[var(--text-tertiary)] hover:bg-[var(--accent)]/10 hover:text-[var(--accent)] transition-colors"
+                                              title="Edit meaning"
+                                            >
+                                              <Pencil size={12} />
+                                            </button>
+                                          )}
+                                          <button
+                                            onClick={() => handleDeleteWordFromSet(set.id, w.id, w.word)}
+                                            className="flex h-7 w-7 items-center justify-center rounded-lg text-[var(--text-tertiary)] hover:bg-red-500/10 hover:text-red-500 transition-colors"
+                                            title="Remove from set"
+                                          >
+                                            <Trash2 size={13} />
+                                          </button>
+                                        </div>
+                                      </div>
+                                      {isEditingSetWord && (
+                                        <div className="space-y-1.5 pt-1 border-t border-[var(--border)]">
+                                          <input
+                                            type="text"
+                                            value={editSetWordMeaning}
+                                            onChange={(e) => setEditSetWordMeaning(e.target.value)}
+                                            placeholder="Meaning (English)"
+                                            className="input-field py-1.5 px-2.5 text-xs bg-[var(--bg-secondary)] w-full"
+                                            autoFocus
+                                          />
+                                          <input
+                                            type="text"
+                                            value={editSetWordSentence}
+                                            onChange={(e) => setEditSetWordSentence(e.target.value)}
+                                            placeholder="Example sentence (optional)"
+                                            className="input-field py-1.5 px-2.5 text-xs bg-[var(--bg-secondary)] w-full"
+                                          />
+                                        </div>
+                                      )}
+                                    </div>
+                                  );
+                                })}
                               </motion.div>
                             )}
                           </AnimatePresence>
@@ -906,45 +1023,124 @@ export default function VocabularyPage() {
                           exit={{ opacity: 0, x: -20 }}
                           transition={{ delay: Math.min(idx * 0.015, 0.3) }}
                         >
-                          <div className="flex items-start justify-between gap-4 p-4 sm:p-5 rounded-2xl border-2 border-[var(--border)] bg-[var(--bg-secondary)] shadow-sm hover:shadow-md transition-shadow">
-                            <div className="min-w-0 flex-1">
-                              <div className="flex flex-wrap items-center gap-2">
-                                <button
-                                  onClick={() => speak(word.word)}
-                                  className="flex h-8 w-8 items-center justify-center rounded-full bg-[var(--accent)]/10 text-[var(--accent)] hover:bg-[var(--accent)]/20 transition-colors"
-                                  title="Pronounce"
-                                >
-                                  <Volume2 size={16} />
-                                </button>
-                                <span className="text-lg font-black text-[var(--text-primary)]">
-                                  {word.word}
-                                </span>
-                                <Badge className="font-bold">{word.partOfSpeech}</Badge>
-                                {word.partOfSpeech.toLowerCase() === 'noun' && word.gender && (
-                                  <Badge className="bg-blue-500/15 text-blue-600 dark:text-blue-400 font-black">
-                                    {word.gender}
+                          <div className="p-4 sm:p-5 rounded-2xl border-2 border-[var(--border)] bg-[var(--bg-secondary)] shadow-sm hover:shadow-md transition-shadow space-y-3">
+                            {/* Word header row */}
+                            <div className="flex items-start justify-between gap-3">
+                              <div className="min-w-0 flex-1">
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <button
+                                    onClick={() => speak(word.word)}
+                                    className="flex h-8 w-8 items-center justify-center rounded-full bg-[var(--accent)]/10 text-[var(--accent)] hover:bg-[var(--accent)]/20 transition-colors"
+                                    title="Pronounce"
+                                  >
+                                    <Volume2 size={16} />
+                                  </button>
+                                  <span className="text-lg font-black text-[var(--text-primary)]">
+                                    {word.word}
+                                  </span>
+                                  <Badge className="font-bold">{word.partOfSpeech}</Badge>
+                                  {word.partOfSpeech.toLowerCase() === 'noun' && word.gender && (
+                                    <Badge className="bg-blue-500/15 text-blue-600 dark:text-blue-400 font-black">
+                                      {word.gender}
+                                    </Badge>
+                                  )}
+                                  <Badge variant="level" level={word.cefrLevel} className="font-black">
+                                    {word.cefrLevel}
                                   </Badge>
+                                </div>
+                                {editingWordId !== word.id && (
+                                  <>
+                                    <p className="mt-1.5 text-sm font-bold text-[var(--text-secondary)]">
+                                      {word.meaning}
+                                    </p>
+                                    {word.exampleSentence && (
+                                      <p className="mt-1 text-xs italic text-[var(--text-tertiary)]">
+                                        „{word.exampleSentence}"
+                                      </p>
+                                    )}
+                                  </>
                                 )}
-                                <Badge variant="level" level={word.cefrLevel} className="font-black">
-                                  {word.cefrLevel}
-                                </Badge>
                               </div>
-                              <p className="mt-1.5 text-sm font-bold text-[var(--text-secondary)]">
-                                {word.meaning}
-                              </p>
-                              {word.exampleSentence && (
-                                <p className="mt-1 text-xs italic text-[var(--text-tertiary)]">
-                                  „{word.exampleSentence}"
-                                </p>
-                              )}
+                              {/* Action buttons */}
+                              <div className="flex items-center gap-1.5 flex-shrink-0">
+                                {editingWordId === word.id ? (
+                                  <>
+                                    <button
+                                      onClick={() => handleSaveWordEdit(word.id)}
+                                      disabled={savingWord}
+                                      className="flex h-9 w-9 items-center justify-center rounded-xl bg-[var(--accent)]/15 text-[var(--accent)] hover:bg-[var(--accent)]/30 transition-colors"
+                                      title="Save changes"
+                                    >
+                                      {savingWord ? <Loader2 size={15} className="animate-spin" /> : <Check size={15} />}
+                                    </button>
+                                    <button
+                                      onClick={() => { setEditingWordId(null); setEditMeaning(''); setEditSentence(''); }}
+                                      className="flex h-9 w-9 items-center justify-center rounded-xl text-[var(--text-tertiary)] hover:bg-[var(--bg-tertiary)] transition-colors"
+                                      title="Cancel"
+                                    >
+                                      <X size={15} />
+                                    </button>
+                                  </>
+                                ) : (
+                                  <button
+                                    onClick={() => {
+                                      setEditingWordId(word.id);
+                                      setEditMeaning(word.meaning || '');
+                                      setEditSentence(word.exampleSentence || '');
+                                    }}
+                                    className="flex h-9 w-9 items-center justify-center rounded-xl text-[var(--text-tertiary)] hover:bg-[var(--accent)]/10 hover:text-[var(--accent)] transition-colors"
+                                    title="Edit meaning"
+                                  >
+                                    <Pencil size={15} />
+                                  </button>
+                                )}
+                                <button
+                                  onClick={() => handleDeleteGeneralWord(word.id)}
+                                  className="flex h-9 w-9 items-center justify-center rounded-xl text-[var(--text-tertiary)] transition-colors hover:bg-red-500/10 hover:text-red-500"
+                                  aria-label="Delete word"
+                                >
+                                  <Trash2 size={16} />
+                                </button>
+                              </div>
                             </div>
-                            <button
-                              onClick={() => handleDeleteGeneralWord(word.id)}
-                              className="flex h-9 w-9 items-center justify-center rounded-xl text-[var(--text-tertiary)] transition-colors hover:bg-red-500/10 hover:text-red-500"
-                              aria-label="Delete word"
-                            >
-                              <Trash2 size={16} />
-                            </button>
+                            {/* Inline edit form */}
+                            <AnimatePresence>
+                              {editingWordId === word.id && (
+                                <motion.div
+                                  initial={{ opacity: 0, height: 0 }}
+                                  animate={{ opacity: 1, height: 'auto' }}
+                                  exit={{ opacity: 0, height: 0 }}
+                                  transition={{ duration: 0.2 }}
+                                  className="overflow-hidden"
+                                >
+                                  <div className="pt-3 border-t border-[var(--border)] space-y-2">
+                                    <div>
+                                      <label className="text-[11px] font-black uppercase tracking-wide text-[var(--text-tertiary)]">Meaning</label>
+                                      <input
+                                        type="text"
+                                        value={editMeaning}
+                                        onChange={(e) => setEditMeaning(e.target.value)}
+                                        onKeyDown={(e) => { if (e.key === 'Enter') handleSaveWordEdit(word.id); if (e.key === 'Escape') { setEditingWordId(null); setEditMeaning(''); setEditSentence(''); } }}
+                                        placeholder="English meaning..."
+                                        className="input-field mt-1 py-2 px-3 text-sm bg-[var(--bg-primary)] w-full"
+                                        autoFocus
+                                      />
+                                    </div>
+                                    <div>
+                                      <label className="text-[11px] font-black uppercase tracking-wide text-[var(--text-tertiary)]">Example Sentence <span className="font-normal normal-case">(optional)</span></label>
+                                      <input
+                                        type="text"
+                                        value={editSentence}
+                                        onChange={(e) => setEditSentence(e.target.value)}
+                                        onKeyDown={(e) => { if (e.key === 'Enter') handleSaveWordEdit(word.id); if (e.key === 'Escape') { setEditingWordId(null); setEditMeaning(''); setEditSentence(''); } }}
+                                        placeholder="Example sentence in German..."
+                                        className="input-field mt-1 py-2 px-3 text-sm bg-[var(--bg-primary)] w-full"
+                                      />
+                                    </div>
+                                  </div>
+                                </motion.div>
+                              )}
+                            </AnimatePresence>
                           </div>
                         </motion.div>
                       ))

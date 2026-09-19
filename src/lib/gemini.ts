@@ -363,7 +363,10 @@ export function fallbackEnrichWord(rawWord: string): EnrichedWord {
   let perfectForm: string | null = null;
   let conjugation: Record<string, string> | null = null;
 
+  // Handle reflexive verbs: "sich baden" → verb, keep "sich" prefix
+  const reflexiveMatch = trimmed.match(/^sich\s+(.+)$/i);
   const matchArticle = trimmed.match(/^(der|die|das)\s+(.+)$/i);
+
   if (matchArticle) {
     const art = matchArticle[1].toLowerCase();
     const noun = matchArticle[2].trim();
@@ -371,8 +374,9 @@ export function fallbackEnrichWord(rawWord: string): EnrichedWord {
     word = `${art} ${capitalizedNoun}`;
     partOfSpeech = 'noun';
     gender = art === 'der' ? 'masculine' : art === 'die' ? 'feminine' : 'neuter';
+    // Use word itself as placeholder — isCorruptedWordData will detect this and trigger AI healing
     meaning = capitalizedNoun;
-    exampleSentence = `Das ist ${gender === 'masculine' ? 'ein' : gender === 'feminine' ? 'eine' : 'ein'} ${capitalizedNoun}.`;
+    exampleSentence = null;
   } else if (/^[A-ZÄÖÜ]/.test(trimmed) && !trimmed.includes(' ')) {
     if (/ung$|keit$|heit$|schaft$|ion$|ik$|ur$|tät$/i.test(trimmed)) {
       gender = 'feminine';
@@ -389,38 +393,31 @@ export function fallbackEnrichWord(rawWord: string): EnrichedWord {
     }
     partOfSpeech = 'noun';
     meaning = trimmed;
-    exampleSentence = `Das ist ${gender === 'masculine' ? 'ein' : gender === 'feminine' ? 'eine' : 'ein'} ${trimmed}.`;
-  } else if (trimmed.endsWith('en') || trimmed.endsWith('eln') || trimmed.endsWith('ern')) {
+    exampleSentence = null;
+  } else if (reflexiveMatch || trimmed.endsWith('en') || trimmed.endsWith('eln') || trimmed.endsWith('ern')) {
+    // Reflexive verb (sich + verb) or regular verb infinitive
     partOfSpeech = 'verb';
     gender = null;
-    const stem = trimmed.endsWith('en') ? trimmed.slice(0, -2) : trimmed.slice(0, -1);
-    verbType = 'regular';
-    auxiliaryType = 'haben';
-    presentForm = `${stem}t`;
-    simplePast = `${stem}te`;
-    perfectForm = `hat ge${stem}t`;
-    // Clean English representation (never pseudo-English "to (verb) - ")
-    meaning = `to ${stem}`;
-    conjugation = {
-      ich: `${stem}e`,
-      du: `${stem}st`,
-      er: `${stem}t`,
-      wir: `${stem}en`,
-      ihr: `${stem}t`,
-      sie: `${stem}en`,
-    };
-    exampleSentence = `Ich möchte heute gerne ${trimmed}.`;
+    if (reflexiveMatch) {
+      word = trimmed.toLowerCase();
+    }
+    // NEVER generate fake stem-based English meanings like "to nehm" — leave meaning
+    // as the word itself so isCorruptedWordData detects it and the auto-healer
+    // will fix it with AI on next page load
+    meaning = trimmed;
+    exampleSentence = null;
   } else if (trimmed.includes(' ')) {
     // Multi-word phrase or idiom: NEVER classify as adjective!
     partOfSpeech = 'other';
     gender = null;
-    meaning = 'expression / phrase';
-    exampleSentence = `Wir verwenden den Ausdruck: "${trimmed}".`;
+    // Use word itself — isCorruptedWordData detects meaning === word
+    meaning = trimmed;
+    exampleSentence = null;
   } else {
     partOfSpeech = 'adjective';
     gender = null;
     meaning = trimmed;
-    exampleSentence = `Das ist ${trimmed}.`;
+    exampleSentence = null;
   }
 
   return {

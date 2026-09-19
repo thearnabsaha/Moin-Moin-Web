@@ -46,6 +46,9 @@ import {
   Copy,
   CheckCheck,
   Lock,
+  Zap,
+  Activity,
+  RefreshCw,
 } from 'lucide-react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { PageHeader } from '@/components/ui/page-header';
@@ -213,6 +216,37 @@ export default function SettingsPage() {
   const [resetModal, setResetModal] = useState<ResetType | null>(null);
   const [resetInput, setResetInput] = useState('');
   const [resetLoading, setResetLoading] = useState(false);
+
+  // ─── AI Rate Limit Status State ───
+  interface AiServiceStatus {
+    name: string;
+    configured: boolean;
+    status: 'operational' | 'rate_limited' | 'error' | 'unconfigured';
+    latencyMs: number | null;
+    model: string | null;
+    error: string | null;
+    rateLimitInfo: {
+      remaining: number | null;
+      limit: number | null;
+      resetAt: string | null;
+    } | null;
+  }
+  const [aiServices, setAiServices] = useState<AiServiceStatus[]>([]);
+  const [aiStatusLoading, setAiStatusLoading] = useState(false);
+  const [aiLastChecked, setAiLastChecked] = useState<string | null>(null);
+
+  const fetchAiStatus = async () => {
+    setAiStatusLoading(true);
+    try {
+      const res = await fetch('/api/ai/status');
+      const data = await res.json();
+      if (res.ok && data.services) {
+        setAiServices(data.services);
+        setAiLastChecked(new Date().toLocaleTimeString());
+      }
+    } catch { /* ignore */ }
+    finally { setAiStatusLoading(false); }
+  };
 
   useEffect(() => setMounted(true), []);
 
@@ -812,6 +846,132 @@ export default function SettingsPage() {
                     );
                   })}
                 </div>
+              </GlassCard>
+            </motion.div>
+
+            {/* AI Rate Limit & Status */}
+            <motion.div
+              initial={{ opacity: 0, y: 16 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.3, delay: 0.055 }}
+            >
+              <GlassCard hover={false} className="p-6">
+                <div className="flex items-center justify-between">
+                  <h2 className="flex items-center gap-2 text-base font-extrabold text-[var(--text-primary)]">
+                    <Zap size={18} className="text-amber-500" />
+                    AI Rate Limit & Status
+                  </h2>
+                  <button
+                    onClick={fetchAiStatus}
+                    disabled={aiStatusLoading}
+                    className="btn-duo-secondary text-xs font-black flex items-center gap-1.5 py-2 px-3 rounded-xl"
+                  >
+                    {aiStatusLoading ? (
+                      <Loader2 size={14} className="animate-spin" />
+                    ) : (
+                      <RefreshCw size={14} />
+                    )}
+                    <span>{aiStatusLoading ? 'Checking...' : 'Check Status'}</span>
+                  </button>
+                </div>
+                <p className="mt-1 text-xs text-[var(--text-tertiary)]">
+                  Live probe of Gemini & Groq AI services — latency, remaining quota, and errors
+                </p>
+
+                {aiServices.length === 0 ? (
+                  <div className="mt-5 rounded-2xl border-2 border-dashed border-[var(--border)] p-6 text-center">
+                    <Activity size={28} className="mx-auto text-[var(--text-tertiary)]" />
+                    <p className="mt-2 text-sm font-bold text-[var(--text-secondary)]">
+                      Click &quot;Check Status&quot; to probe AI services
+                    </p>
+                    <p className="mt-1 text-xs text-[var(--text-tertiary)]">
+                      Sends a tiny test request to each AI provider to measure availability and rate limits
+                    </p>
+                  </div>
+                ) : (
+                  <div className="mt-5 space-y-3">
+                    {aiServices.map((svc) => {
+                      const statusConfig = {
+                        operational: { color: 'text-emerald-600 dark:text-emerald-400', bg: 'bg-emerald-500/15', dot: 'bg-emerald-500', label: 'Operational' },
+                        rate_limited: { color: 'text-amber-600 dark:text-amber-400', bg: 'bg-amber-500/15', dot: 'bg-amber-500 animate-pulse', label: 'Rate Limited' },
+                        error: { color: 'text-red-600 dark:text-red-400', bg: 'bg-red-500/15', dot: 'bg-red-500', label: 'Error' },
+                        unconfigured: { color: 'text-[var(--text-tertiary)]', bg: 'bg-[var(--bg-tertiary)]', dot: 'bg-gray-400', label: 'Not Configured' },
+                      }[svc.status];
+
+                      return (
+                        <div
+                          key={svc.name}
+                          className="rounded-2xl border border-[var(--border)] bg-[var(--bg-secondary)] p-4 sm:p-5"
+                        >
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-3">
+                              <div className={cn('flex h-10 w-10 items-center justify-center rounded-xl', svc.name === 'Google Gemini' ? 'bg-blue-500/10 text-blue-500' : 'bg-orange-500/10 text-orange-500')}>
+                                <Zap size={20} />
+                              </div>
+                              <div>
+                                <p className="text-sm font-extrabold text-[var(--text-primary)]">{svc.name}</p>
+                                {svc.model && (
+                                  <p className="text-[11px] font-mono text-[var(--text-tertiary)]">{svc.model}</p>
+                                )}
+                              </div>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <span className={cn('h-2.5 w-2.5 rounded-full', statusConfig.dot)} />
+                              <span className={cn('rounded-lg px-2.5 py-1 text-[11px] font-black', statusConfig.bg, statusConfig.color)}>
+                                {statusConfig.label}
+                              </span>
+                            </div>
+                          </div>
+
+                          {svc.configured && (
+                            <div className="mt-3 grid grid-cols-2 sm:grid-cols-3 gap-3">
+                              {/* Latency */}
+                              <div className="rounded-xl bg-[var(--bg-primary)] p-3 border border-[var(--border)]">
+                                <p className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-tertiary)]">Latency</p>
+                                <p className={cn('mt-1 text-lg font-black', svc.latencyMs !== null && svc.latencyMs < 2000 ? 'text-emerald-600 dark:text-emerald-400' : svc.latencyMs !== null && svc.latencyMs < 5000 ? 'text-amber-600 dark:text-amber-400' : 'text-red-600 dark:text-red-400')}>
+                                  {svc.latencyMs !== null ? `${svc.latencyMs}ms` : '—'}
+                                </p>
+                              </div>
+                              {/* Remaining */}
+                              <div className="rounded-xl bg-[var(--bg-primary)] p-3 border border-[var(--border)]">
+                                <p className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-tertiary)]">Remaining</p>
+                                <p className="mt-1 text-lg font-black text-[var(--text-primary)]">
+                                  {svc.rateLimitInfo?.remaining !== null && svc.rateLimitInfo?.remaining !== undefined
+                                    ? svc.rateLimitInfo.remaining.toLocaleString()
+                                    : '—'}
+                                  {svc.rateLimitInfo?.limit !== null && svc.rateLimitInfo?.limit !== undefined && (
+                                    <span className="text-xs font-bold text-[var(--text-tertiary)]"> / {svc.rateLimitInfo.limit.toLocaleString()}</span>
+                                  )}
+                                </p>
+                              </div>
+                              {/* Reset */}
+                              <div className="rounded-xl bg-[var(--bg-primary)] p-3 border border-[var(--border)] col-span-2 sm:col-span-1">
+                                <p className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-tertiary)]">Resets</p>
+                                <p className="mt-1 text-sm font-bold text-[var(--text-primary)] truncate">
+                                  {svc.rateLimitInfo?.resetAt || '—'}
+                                </p>
+                              </div>
+                            </div>
+                          )}
+
+                          {svc.error && (
+                            <div className="mt-3 rounded-xl bg-red-500/10 border border-red-500/20 px-3 py-2">
+                              <p className="text-xs font-bold text-red-600 dark:text-red-400 break-all">
+                                {svc.error}
+                              </p>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+
+                    {aiLastChecked && (
+                      <p className="text-[11px] font-medium text-[var(--text-tertiary)] text-right">
+                        Last checked: {aiLastChecked}
+                      </p>
+                    )}
+                  </div>
+                )}
               </GlassCard>
             </motion.div>
 

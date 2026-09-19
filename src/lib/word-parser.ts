@@ -8,7 +8,7 @@
  * Normalizes a German word to its root form for robust comparison and deduplication.
  * - Lowercases
  * - Removes articles (der, die, das, dem, den, des, ein, eine, etc.)
- * - Removes reflexive pronoun (sich)
+ * - Preserves reflexive pronoun "sich" so that "sich baden" and "baden" stay distinct
  * - Removes punctuation and whitespace
  */
 export function normalizeWord(word: string): string {
@@ -17,7 +17,6 @@ export function normalizeWord(word: string): string {
     .toLowerCase()
     .trim()
     .replace(/^(der|die|das|dem|den|des|ein|eine|einen|einem|einer|eines)\s+/i, '')
-    .replace(/^(sich)\s+/i, '')
     .replace(/[^a-z0-9äöüß]/gi, '')
     .trim();
 }
@@ -50,19 +49,26 @@ export function parseAndCleanWords(input: string): string[] {
       const p = part.trim();
       if (!p) continue;
 
-      // Check for fixed expressions, idioms, or article + noun pairs
+      // Check for fixed expressions, idioms, or article + noun / sich + verb pairs
       const FIXED_PHRASES = new Set(['es geht', "wie geht's", 'wie geht es', 'guten tag', 'guten morgen', 'guten abend', 'gute nacht', 'auf wiedersehen', 'ab und zu', 'gar nicht']);
       if (p.includes(' ') && !FIXED_PHRASES.has(p.toLowerCase())) {
         // If it's a single article + noun, e.g. "der Tisch" or "die Katze", keep as one
         const articleNounMatch = p.match(/^(der|die|das|ein|eine|einen|einem|einer|eines)\s+([A-ZÄÖÜa-zäöüß]+)$/i);
-        if (articleNounMatch) {
+        // If it's a reflexive verb, e.g. "sich baden", "sich freuen", keep as one
+        const reflexiveMatch = p.match(/^sich\s+([A-ZÄÖÜa-zäöüß]+)$/i);
+        if (articleNounMatch || reflexiveMatch) {
           candidateSegments.push(p);
         } else {
-          // If user pasted a space-separated sequence e.g. "anfangen fangen halten" or "der Hund das Buch"
+          // If user pasted a space-separated sequence e.g. "anfangen fangen halten" or "der Hund das Buch sich baden"
           const tokens = p.split(/\s+/);
           for (let ti = 0; ti < tokens.length; ti++) {
             const token = tokens[ti];
+            // Group articles with the next token: "der Tisch" stays together
             if (/^(der|die|das|ein|eine|einen|einem|einer|eines)$/i.test(token) && ti + 1 < tokens.length) {
+              candidateSegments.push(`${token} ${tokens[ti + 1]}`);
+              ti++;
+            // Group "sich" with the next token: "sich baden" stays together
+            } else if (/^sich$/i.test(token) && ti + 1 < tokens.length) {
               candidateSegments.push(`${token} ${tokens[ti + 1]}`);
               ti++;
             } else {

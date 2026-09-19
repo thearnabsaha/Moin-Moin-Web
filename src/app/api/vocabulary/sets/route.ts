@@ -40,6 +40,9 @@ export async function GET() {
       conjugation?: Record<string, string> | null;
     }> = [];
 
+    // Collect corrupted words not fixable by dictionary — need AI enrichment
+    const wordsNeedingAiHeal: Array<{ id: string; word: string }> = [];
+
     // Group words by batchId in-memory in 0ms with on-the-fly healing
     const wordsByBatch = new Map<string, typeof allUserWords>();
     for (const word of allUserWords) {
@@ -67,6 +70,9 @@ export async function GET() {
             perfectForm: dict.perfectForm ?? word.perfectForm,
             conjugation: dict.conjugation ?? (word.conjugation as Record<string, string> | null),
           });
+        } else {
+          // Dictionary doesn't have it — queue for AI healing in background
+          wordsNeedingAiHeal.push({ id: word.id, word: word.word });
         }
       }
       if (word.batchId) {
@@ -76,6 +82,7 @@ export async function GET() {
       }
     }
 
+    // Persist dictionary-based heals in background
     if (rowsToHealInDb.length > 0) {
       Promise.all(
         rowsToHealInDb.map((item) =>
@@ -93,7 +100,47 @@ export async function GET() {
             })
             .where(eq(userWords.id, item.id))
         )
-      ).catch((err) => console.error('[GET Sets Auto-heal error]:', err));
+      ).catch((err) => console.error('[GET Sets Auto-heal dict error]:', err));
+    }
+
+    // Fire-and-forget AI enrichment for words that dictionary couldn't fix
+    if (wordsNeedingAiHeal.length > 0) {
+      const wordTexts = wordsNeedingAiHeal.map((w) => w.word);
+      console.log(`[GET Sets AI-heal] Enriching ${wordTexts.length} corrupted word(s) in background:`, wordTexts);
+      enrichWordsWithGemini(wordTexts)
+        .then(async (enriched) => {
+          const updates: Promise<unknown>[] = [];
+          for (let i = 0; i < enriched.length && i < wordsNeedingAiHeal.length; i++) {
+            const e = enriched[i];
+            const target = wordsNeedingAiHeal[i];
+            if (e && e.meaning && !isCorruptedWordData(e.word, e.meaning, e.example_sentence, e.part_of_speech)) {
+              updates.push(
+                db
+                  .update(userWords)
+                  .set({
+                    meaning: e.meaning,
+                    exampleSentence: e.example_sentence ?? null,
+                    partOfSpeech: e.part_of_speech,
+                    gender: e.part_of_speech === 'noun' ? (e.gender ?? null) : null,
+                    pluralForm: e.plural_form ?? null,
+                    conjugation: e.conjugation ?? null,
+                    cefrLevel: e.cefr_level ?? 'A1',
+                    verbType: e.verb_type ?? null,
+                    auxiliaryType: e.auxiliary_type ?? null,
+                    presentForm: e.present_form ?? null,
+                    simplePast: e.simple_past ?? null,
+                    perfectForm: e.perfect_form ?? null,
+                  })
+                  .where(eq(userWords.id, target.id))
+              );
+            }
+          }
+          if (updates.length > 0) {
+            await Promise.all(updates);
+            console.log(`[GET Sets AI-heal] Successfully healed ${updates.length} word(s)`);
+          }
+        })
+        .catch((err) => console.error('[GET Sets AI-heal error]:', err));
     }
 
     const result = batches.map((b) => {
