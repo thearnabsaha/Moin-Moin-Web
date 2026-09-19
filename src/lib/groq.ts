@@ -9,6 +9,11 @@ import {
   type EnrichedExpression,
   type ChatResponse,
 } from './validations';
+import {
+  enrichWordsWithGemini,
+  enrichExpressionsWithGemini,
+  isGeminiConfigured,
+} from './gemini';
 
 let groqInstance: Groq | null = null;
 
@@ -384,6 +389,14 @@ async function enrichBatch(words: string[]): Promise<EnrichedWord[]> {
 }
 
 export async function enrichWords(words: string[]): Promise<EnrichedWord[]> {
+  if (isGeminiConfigured()) {
+    try {
+      return await enrichWordsWithGemini(words);
+    } catch (geminiErr) {
+      console.warn('[enrichWords] Gemini enrichment failed, falling back to Groq cascade:', geminiErr);
+    }
+  }
+
   if (words.length <= ENRICH_BATCH_SIZE) {
     return enrichBatch(words);
   }
@@ -490,6 +503,14 @@ async function enrichExpressionBatch(expressions: string[]): Promise<EnrichedExp
 }
 
 export async function enrichExpressions(expressions: string[]): Promise<EnrichedExpression[]> {
+  if (isGeminiConfigured()) {
+    try {
+      return await enrichExpressionsWithGemini(expressions);
+    } catch (geminiErr) {
+      console.warn('[enrichExpressions] Gemini enrichment failed, falling back to Groq cascade:', geminiErr);
+    }
+  }
+
   if (expressions.length <= ENRICH_BATCH_SIZE) {
     return enrichExpressionBatch(expressions);
   }

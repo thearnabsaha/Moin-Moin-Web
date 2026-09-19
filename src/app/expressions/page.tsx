@@ -82,8 +82,8 @@ export default function ExpressionsPage() {
     setUploading(true);
 
     const count = trimmed.split(/\n+/).filter((w) => w.trim()).length;
-    const toastId = count > 10
-      ? toast.loading(`Enriching ${count} expressions... This may take a moment.`)
+    const toastId = count > 5
+      ? toast.loading(`Enriching ${count} expressions with Gemini AI...`)
       : undefined;
 
     try {

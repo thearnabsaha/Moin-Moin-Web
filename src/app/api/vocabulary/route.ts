@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { eq, desc, and } from 'drizzle-orm';
 import { db } from '@/lib/db';
-import { userWords } from '@/lib/schema';
+import { userWords, wordBatches } from '@/lib/schema';
 import { getCurrentUserId } from '@/lib/get-user';
+import { enrichWordsWithGemini } from '@/lib/gemini';
 
 type PartOfSpeech = 'noun' | 'verb' | 'adjective' | 'preposition' | 'conjunction' | 'other';
 type Gender = 'masculine' | 'feminine' | 'neuter';
@@ -129,3 +130,121 @@ export async function DELETE(request: NextRequest) {
     return NextResponse.json({ success: false, error: 'Delete failed' }, { status: 500 });
   }
 }
+
+function normalizeForComparison(w: string): string {
+  return w
+    .toLowerCase()
+    .replace(/^(der|die|das|dem|den|des)\s+/, '')
+    .trim();
+}
+
+function parseWords(input: string): string[] {
+  return Array.from(
+    new Set(
+      input
+        .split(/[\n,;]+/)
+        .map((w) => w.trim())
+        .filter((w) => w.length > 0)
+    )
+  );
+}
+
+// POST /api/vocabulary - Add and enrich German words with Gemini AI
+export async function POST(request: NextRequest) {
+  try {
+    const userId = await getCurrentUserId();
+    const body = await request.json();
+    const rawInput = body.words || body.word;
+
+    if (!rawInput || typeof rawInput !== 'string' || !rawInput.trim()) {
+      return NextResponse.json({ error: 'Please provide one or more German words' }, { status: 400 });
+    }
+
+    const parsed = parseWords(rawInput);
+    if (parsed.length === 0) {
+      return NextResponse.json({ error: 'No valid words parsed from input' }, { status: 400 });
+    }
+
+    // Check existing words
+    const existingRows = await db
+      .select({ word: userWords.word })
+      .from(userWords)
+      .where(eq(userWords.userId, userId));
+    const existingNorm = new Set(existingRows.map((r) => normalizeForComparison(r.word)));
+
+    const newWords = parsed.filter((w) => !existingNorm.has(normalizeForComparison(w)));
+    if (newWords.length === 0) {
+      return NextResponse.json(
+        { error: 'All words already exist in your vocabulary', added: 0, skipped: parsed.length },
+        { status: 400 }
+      );
+    }
+
+    // Enrich with Gemini
+    const enriched = await enrichWordsWithGemini(newWords);
+    if (!enriched || enriched.length === 0) {
+      return NextResponse.json({ error: 'Enrichment failed. Please try again.' }, { status: 500 });
+    }
+
+    const deduped = enriched.filter((w) => !existingNorm.has(normalizeForComparison(w.word)));
+    if (deduped.length === 0) {
+      return NextResponse.json(
+        { error: 'All words already exist in your vocabulary', added: 0, skipped: parsed.length },
+        { status: 400 }
+      );
+    }
+
+    // Create a batch
+    const setName = body.setName?.trim() || `Vocab ${new Date().toLocaleDateString('de-DE')}`;
+    const [batch] = await db
+      .insert(wordBatches)
+      .values({
+        userId,
+        name: setName,
+        wordCount: deduped.length,
+        learnedCount: 0,
+      })
+      .returning();
+
+    const created = [];
+    for (const w of deduped) {
+      const [inserted] = await db
+        .insert(userWords)
+        .values({
+          userId,
+          word: w.word,
+          partOfSpeech: w.part_of_speech,
+          gender: w.gender ?? null,
+          pluralForm: w.plural_form ?? null,
+          conjugation: (w.conjugation as Record<string, string> | null) ?? null,
+          meaning: w.meaning,
+          cefrLevel: w.cefr_level ?? 'A1',
+          exampleSentence: w.example_sentence ?? null,
+          verbType: w.verb_type ?? null,
+          auxiliaryType: w.auxiliary_type ?? null,
+          presentForm: w.present_form ?? null,
+          simplePast: w.simple_past ?? null,
+          perfectForm: w.perfect_form ?? null,
+          batchId: batch.id,
+          learned: false,
+        })
+        .returning();
+      created.push(inserted);
+    }
+
+    return NextResponse.json({
+      success: true,
+      added: created.length,
+      skipped: parsed.length - newWords.length + (enriched.length - deduped.length),
+      words: created,
+      batch,
+    });
+  } catch (error) {
+    if (error instanceof Error && error.message === 'Not authenticated') {
+      return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
+    }
+    console.error('Vocabulary POST error:', error);
+    return NextResponse.json({ error: 'Failed to add words' }, { status: 500 });
+  }
+}
+

@@ -195,7 +195,7 @@ export default function VocabularyPage() {
 
     setCreatingSet(true);
     const wordCount = trimmedWords.split(/[\n,;]+/).filter((w) => w.trim()).length;
-    const toastId = toast.loading(`Enriching ${wordCount} word(s) with German grammar & meanings...`);
+    const toastId = toast.loading(`Enriching ${wordCount} word(s) with Gemini AI...`);
 
     try {
       const controller = new AbortController();
@@ -285,7 +285,7 @@ export default function VocabularyPage() {
       return;
     }
     setAddingWordsLoading(true);
-    const toastId = toast.loading('Enriching and adding words to set...');
+    const toastId = toast.loading('Enriching and adding words with Gemini AI...');
 
     try {
       const res = await fetch(`/api/vocabulary/sets/${setId}/words`, {
@@ -390,27 +390,28 @@ export default function VocabularyPage() {
             <span>Vocab Book</span>
           </Link>
 
-          {activeTab === 'sets' && (
-            <button
-              onClick={() => setIsCreateOpen((prev) => !prev)}
-              className={cn(
-                'py-2 px-3.5 text-xs sm:text-sm font-black flex items-center gap-1.5 transition-all',
-                isCreateOpen ? 'btn-duo-secondary' : 'btn-duo-primary'
-              )}
-            >
-              {isCreateOpen ? (
-                <>
-                  <X size={15} />
-                  <span>Close</span>
-                </>
-              ) : (
-                <>
-                  <Plus size={15} />
-                  <span>New Set</span>
-                </>
-              )}
-            </button>
-          )}
+          <button
+            onClick={() => {
+              if (activeTab !== 'sets') setActiveTab('sets');
+              setIsCreateOpen((prev) => !prev);
+            }}
+            className={cn(
+              'py-2 px-3.5 text-xs sm:text-sm font-black flex items-center gap-1.5 transition-all',
+              isCreateOpen ? 'btn-duo-secondary' : 'btn-duo-primary'
+            )}
+          >
+            {isCreateOpen ? (
+              <>
+                <X size={15} />
+                <span>Close</span>
+              </>
+            ) : (
+              <>
+                <Plus size={15} />
+                <span>Add Words</span>
+              </>
+            )}
+          </button>
         </div>
       </div>
 
@@ -466,10 +467,10 @@ export default function VocabularyPage() {
                         </div>
                         <div>
                           <h2 className="text-base font-extrabold text-[var(--text-primary)]">
-                            Create New Word Set
+                            Add Words & Create Set
                           </h2>
                           <p className="text-xs text-[var(--text-tertiary)]">
-                            Comma-separated words are enriched with articles, plural forms & examples
+                            Powered by Gemini AI — German words are automatically enriched with articles, plural forms & examples
                           </p>
                         </div>
                       </div>
