@@ -14,11 +14,11 @@ import { normalizeWord } from './word-parser';
  * gemini-3.8-flash is Google's premier, state-of-the-art model with advanced multilingual reasoning.
  */
 const GEMINI_MODELS = [
-  'gemini-3.8-flash',
-  'gemini-3.7-flash',
-  'gemini-3.6-flash',
-  'gemini-3.5-flash',
+  'gemini-3.5-flash-lite',
   'gemini-flash-latest',
+  'gemini-3.5-flash',
+  'gemini-3.6-flash',
+  'gemini-3.8-flash',
 ] as const;
 
 /**
@@ -87,7 +87,7 @@ export async function callGemini(params: CallAiParams): Promise<string> {
     prompt,
     temperature = 0.1,
     responseMimeType = 'application/json',
-    timeoutMs = 18_000,
+    timeoutMs = 4_500,
     preferredModel,
   } = params;
 
@@ -316,10 +316,10 @@ export function fallbackEnrichWord(rawWord: string): EnrichedWord {
       example_sentence: dictEntry.exampleSentence ?? `Ich lerne das Wort "${word}".`,
       verb_type: dictEntry.verbType ?? null,
       auxiliary_type: dictEntry.auxiliaryType ?? null,
-      present_form: null,
-      simple_past: null,
-      perfect_form: null,
-      conjugation: null,
+      present_form: dictEntry.presentForm ?? null,
+      simple_past: dictEntry.simplePast ?? null,
+      perfect_form: dictEntry.perfectForm ?? null,
+      conjugation: dictEntry.conjugation ?? null,
     };
   }
 
@@ -399,8 +399,8 @@ export function fallbackEnrichWord(rawWord: string): EnrichedWord {
     presentForm = `${stem}t`;
     simplePast = `${stem}te`;
     perfectForm = `hat ge${stem}t`;
-    // Clean meaning without naive stem chopping
-    meaning = `to (verb) – ${trimmed}`;
+    // Clean English representation (never pseudo-English "to (verb) - ")
+    meaning = `to ${stem}`;
     conjugation = {
       ich: `${stem}e`,
       du: `${stem}st`,
@@ -409,7 +409,7 @@ export function fallbackEnrichWord(rawWord: string): EnrichedWord {
       ihr: `${stem}t`,
       sie: `${stem}en`,
     };
-    exampleSentence = `Wir müssen heute ${trimmed}.`;
+    exampleSentence = `Ich möchte heute gerne ${trimmed}.`;
   } else if (trimmed.includes(' ')) {
     // Multi-word phrase or idiom: NEVER classify as adjective!
     partOfSpeech = 'other';
@@ -450,7 +450,7 @@ function sanitizeEnrichedItem(item: Record<string, unknown>): void {
     item.plural_form = null;
   }
 
-  // 2. Fix identical, empty, or naive fake stem meanings (e.g. "to dank", "to heiß", "es geht")
+  // 2. Fix identical, empty, pseudo-meaning, or naive fake stem meanings
   const rawWord = String(item.word || '').trim();
   const cleanWord = rawWord.replace(/^(der|die|das)\s+/i, '').trim().toLowerCase();
   const rawMeaning = String(item.meaning || '').trim().toLowerCase();
@@ -462,6 +462,7 @@ function sanitizeEnrichedItem(item: Record<string, unknown>): void {
     rawMeaning === 'to dank' ||
     rawMeaning === 'to heiß' ||
     rawMeaning === 'to heiss' ||
+    rawMeaning.includes('to (verb)') ||
     (rawMeaning.startsWith('to ') && rawMeaning.slice(3).trim() === (cleanWord.endsWith('en') ? cleanWord.slice(0, -2) : '')) ||
     (cleanWord === 'es geht' && (rawMeaning === 'es geht' || pos === 'adjective'));
 
@@ -470,9 +471,15 @@ function sanitizeEnrichedItem(item: Record<string, unknown>): void {
     if (dict) {
       item.meaning = dict.meaning;
       if (dict.partOfSpeech) item.part_of_speech = dict.partOfSpeech;
-      if (!item.example_sentence || String(item.example_sentence).includes('Das ist ') || String(item.example_sentence).includes('Ich möchte gerne ')) {
+      if (dict.presentForm && !item.present_form) item.present_form = dict.presentForm;
+      if (dict.simplePast && !item.simple_past) item.simple_past = dict.simplePast;
+      if (dict.perfectForm && !item.perfect_form) item.perfect_form = dict.perfectForm;
+      if (dict.conjugation && !item.conjugation) item.conjugation = dict.conjugation;
+      if (!item.example_sentence || String(item.example_sentence).includes('Das ist ') || String(item.example_sentence).includes('Ich möchte gerne ') || String(item.example_sentence).includes('Wir müssen heute')) {
         item.example_sentence = dict.exampleSentence;
       }
+    } else if (rawMeaning.includes('to (verb)')) {
+      item.meaning = rawMeaning.replace(/to \(verb\)\s*[–-]\s*/gi, 'to ').replace(/to \(verb\)/gi, '').trim();
     }
   }
 
@@ -482,6 +489,8 @@ function sanitizeEnrichedItem(item: Record<string, unknown>): void {
     (
       item.example_sentence.includes('zusammen.') ||
       item.example_sentence.includes('Das ist sehr') ||
+      item.example_sentence.includes('Wir müssen heute') ||
+      item.example_sentence.includes('Wir verwenden den Ausdruck') ||
       item.example_sentence.startsWith(`Das ist ${rawWord}`) ||
       item.example_sentence.startsWith(`Das ist ${cleanWord}`) ||
       item.example_sentence.startsWith(`Ich möchte gerne ${rawWord}`) ||
@@ -505,6 +514,10 @@ function sanitizeEnrichedItem(item: Record<string, unknown>): void {
       if (dictMatch.pluralForm && !item.plural_form) item.plural_form = dictMatch.pluralForm;
     } else if (pos === 'verb' && dictMatch.partOfSpeech === 'verb') {
       item.word = dictMatch.canonicalWord;
+      if (dictMatch.presentForm && !item.present_form) item.present_form = dictMatch.presentForm;
+      if (dictMatch.simplePast && !item.simple_past) item.simple_past = dictMatch.simplePast;
+      if (dictMatch.perfectForm && !item.perfect_form) item.perfect_form = dictMatch.perfectForm;
+      if (dictMatch.conjugation && !item.conjugation) item.conjugation = dictMatch.conjugation;
     }
   }
 }

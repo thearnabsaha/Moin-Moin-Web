@@ -5,6 +5,7 @@ import { eq, desc } from 'drizzle-orm';
 import { getSession } from '@/lib/auth';
 import { enrichWordsWithGemini } from '@/lib/gemini';
 import { parseAndCleanWords, normalizeWord, isCorruptedWordData } from '@/lib/word-parser';
+import { lookupWord } from '@/lib/dictionary-data';
 
 export const maxDuration = 60;
 
@@ -27,14 +28,72 @@ export async function GET() {
         .orderBy(desc(userWords.createdAt)),
     ]);
 
-    // Group words by batchId in-memory in 0ms
+    const rowsToHealInDb: Array<{
+      id: string;
+      meaning: string;
+      exampleSentence: string | null;
+      partOfSpeech: string;
+      gender: string | null;
+      presentForm?: string | null;
+      simplePast?: string | null;
+      perfectForm?: string | null;
+      conjugation?: Record<string, string> | null;
+    }> = [];
+
+    // Group words by batchId in-memory in 0ms with on-the-fly healing
     const wordsByBatch = new Map<string, typeof allUserWords>();
     for (const word of allUserWords) {
+      if (isCorruptedWordData(word.word, word.meaning, word.exampleSentence, word.partOfSpeech)) {
+        const clean = normalizeWord(word.word);
+        const raw = word.word.trim().toLowerCase();
+        const dict = lookupWord(clean) || lookupWord(raw);
+        if (dict) {
+          word.meaning = dict.meaning;
+          if (dict.exampleSentence) word.exampleSentence = dict.exampleSentence;
+          if (dict.partOfSpeech) word.partOfSpeech = dict.partOfSpeech;
+          if (dict.gender !== undefined) word.gender = dict.partOfSpeech === 'noun' ? dict.gender : null;
+          if (dict.presentForm) word.presentForm = dict.presentForm;
+          if (dict.simplePast) word.simplePast = dict.simplePast;
+          if (dict.perfectForm) word.perfectForm = dict.perfectForm;
+          if (dict.conjugation) word.conjugation = dict.conjugation;
+          rowsToHealInDb.push({
+            id: word.id,
+            meaning: dict.meaning,
+            exampleSentence: dict.exampleSentence ?? word.exampleSentence,
+            partOfSpeech: dict.partOfSpeech || word.partOfSpeech,
+            gender: dict.partOfSpeech === 'noun' ? (dict.gender ?? null) : null,
+            presentForm: dict.presentForm ?? word.presentForm,
+            simplePast: dict.simplePast ?? word.simplePast,
+            perfectForm: dict.perfectForm ?? word.perfectForm,
+            conjugation: dict.conjugation ?? (word.conjugation as Record<string, string> | null),
+          });
+        }
+      }
       if (word.batchId) {
         const list = wordsByBatch.get(word.batchId) || [];
         list.push(word);
         wordsByBatch.set(word.batchId, list);
       }
+    }
+
+    if (rowsToHealInDb.length > 0) {
+      Promise.all(
+        rowsToHealInDb.map((item) =>
+          db
+            .update(userWords)
+            .set({
+              meaning: item.meaning,
+              exampleSentence: item.exampleSentence,
+              partOfSpeech: item.partOfSpeech,
+              gender: item.gender,
+              presentForm: item.presentForm,
+              simplePast: item.simplePast,
+              perfectForm: item.perfectForm,
+              conjugation: item.conjugation,
+            })
+            .where(eq(userWords.id, item.id))
+        )
+      ).catch((err) => console.error('[GET Sets Auto-heal error]:', err));
     }
 
     const result = batches.map((b) => {

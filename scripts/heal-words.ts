@@ -34,6 +34,12 @@ async function heal() {
           exampleSentence: dict.exampleSentence ?? row.exampleSentence,
           gender: dict.partOfSpeech === 'noun' ? (dict.gender ?? null) : null,
           partOfSpeech: dict.partOfSpeech || row.partOfSpeech,
+          presentForm: dict.presentForm ?? row.presentForm,
+          simplePast: dict.simplePast ?? row.simplePast,
+          perfectForm: dict.perfectForm ?? row.perfectForm,
+          conjugation: dict.conjugation ?? (row.conjugation as Record<string, string> | null),
+          verbType: dict.verbType ?? row.verbType,
+          auxiliaryType: dict.auxiliaryType ?? row.auxiliaryType,
         })
         .where(eq(userWords.id, row.id));
       repaired++;
@@ -65,6 +71,12 @@ async function heal() {
             exampleSentence: enriched.example_sentence ?? target.exampleSentence,
             gender: enriched.part_of_speech === 'noun' ? (enriched.gender ?? null) : null,
             partOfSpeech: enriched.part_of_speech,
+            presentForm: enriched.present_form ?? target.presentForm,
+            simplePast: enriched.simple_past ?? target.simplePast,
+            perfectForm: enriched.perfect_form ?? target.perfectForm,
+            conjugation: (enriched.conjugation as Record<string, string> | null) ?? (target.conjugation as Record<string, string> | null),
+            verbType: enriched.verb_type ?? target.verbType,
+            auxiliaryType: enriched.auxiliary_type ?? target.auxiliaryType,
           })
           .where(eq(userWords.id, target.id));
         repaired++;

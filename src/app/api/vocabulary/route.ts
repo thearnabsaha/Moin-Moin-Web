@@ -5,6 +5,7 @@ import { userWords, wordBatches } from '@/lib/schema';
 import { getCurrentUserId } from '@/lib/get-user';
 import { enrichWordsWithGemini } from '@/lib/gemini';
 import { parseAndCleanWords, normalizeWord, isCorruptedWordData } from '@/lib/word-parser';
+import { lookupWord } from '@/lib/dictionary-data';
 
 type PartOfSpeech = 'noun' | 'verb' | 'adjective' | 'preposition' | 'conjunction' | 'other';
 type Gender = 'masculine' | 'feminine' | 'neuter';
@@ -62,7 +63,69 @@ export async function GET() {
         }
       }
     }
-    const rows = Array.from(uniqueWordMap.values());
+
+    // Auto-heal corrupted rows on-the-fly and persist repair in background
+    const rowsToHealInDb: Array<{
+      id: string;
+      meaning: string;
+      exampleSentence: string | null;
+      partOfSpeech: string;
+      gender: string | null;
+      presentForm?: string | null;
+      simplePast?: string | null;
+      perfectForm?: string | null;
+      conjugation?: Record<string, string> | null;
+    }> = [];
+
+    const rows = Array.from(uniqueWordMap.values()).map((row) => {
+      if (isCorruptedWordData(row.word, row.meaning, row.exampleSentence, row.partOfSpeech)) {
+        const clean = normalizeWord(row.word);
+        const raw = row.word.trim().toLowerCase();
+        const dict = lookupWord(clean) || lookupWord(raw);
+        if (dict) {
+          row.meaning = dict.meaning;
+          if (dict.exampleSentence) row.exampleSentence = dict.exampleSentence;
+          if (dict.partOfSpeech) row.partOfSpeech = dict.partOfSpeech;
+          if (dict.gender !== undefined) row.gender = dict.partOfSpeech === 'noun' ? dict.gender : null;
+          if (dict.presentForm) row.presentForm = dict.presentForm;
+          if (dict.simplePast) row.simplePast = dict.simplePast;
+          if (dict.perfectForm) row.perfectForm = dict.perfectForm;
+          if (dict.conjugation) row.conjugation = dict.conjugation;
+          rowsToHealInDb.push({
+            id: row.id,
+            meaning: dict.meaning,
+            exampleSentence: dict.exampleSentence ?? row.exampleSentence,
+            partOfSpeech: dict.partOfSpeech || row.partOfSpeech,
+            gender: dict.partOfSpeech === 'noun' ? (dict.gender ?? null) : null,
+            presentForm: dict.presentForm ?? row.presentForm,
+            simplePast: dict.simplePast ?? row.simplePast,
+            perfectForm: dict.perfectForm ?? row.perfectForm,
+            conjugation: dict.conjugation ?? (row.conjugation as Record<string, string> | null),
+          });
+        }
+      }
+      return row;
+    });
+
+    if (rowsToHealInDb.length > 0) {
+      Promise.all(
+        rowsToHealInDb.map((item) =>
+          db
+            .update(userWords)
+            .set({
+              meaning: item.meaning,
+              exampleSentence: item.exampleSentence,
+              partOfSpeech: item.partOfSpeech,
+              gender: item.gender,
+              presentForm: item.presentForm,
+              simplePast: item.simplePast,
+              perfectForm: item.perfectForm,
+              conjugation: item.conjugation,
+            })
+            .where(eq(userWords.id, item.id))
+        )
+      ).catch((err) => console.error('[GET Vocab Auto-heal error]:', err));
+    }
 
     const analytics: Analytics = {
       totalWords: rows.length,
