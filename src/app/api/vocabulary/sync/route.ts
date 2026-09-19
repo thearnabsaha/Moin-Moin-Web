@@ -3,6 +3,8 @@ import { db } from '@/lib/db';
 import { userWords, wordBatches, wordReviewLogs } from '@/lib/schema';
 import { eq, and, inArray, InferSelectModel } from 'drizzle-orm';
 import { getSession } from '@/lib/auth';
+import { enrichWordsWithGemini } from '@/lib/gemini';
+import { lookupWord } from '@/lib/dictionary-data';
 
 type UserWordRow = InferSelectModel<typeof userWords>;
 
@@ -104,6 +106,57 @@ export async function POST() {
         .where(and(eq(userWords.userId, session.id), inArray(userWords.id, removedIds)));
     }
 
+    // Auto-repair any damaged words (e.g. self-referential meanings, dummy sentences, non-noun genders)
+    let totalRepairedWords = 0;
+    for (const w of allWords) {
+      if (removedIds.includes(w.id)) continue;
+
+      const cleanWord = normalizeForComparison(w.word);
+      const rawWord = w.word.trim().toLowerCase();
+      const rawMeaning = (w.meaning || '').trim().toLowerCase();
+
+      const isMeaningSelfReferential = !rawMeaning || rawMeaning === cleanWord || rawMeaning === rawWord;
+      const isDummySentence = !w.exampleSentence || w.exampleSentence.includes('zusammen.') || w.exampleSentence.includes('Ich lerne das Wort');
+      const isNonNounWithGender = w.partOfSpeech && w.partOfSpeech.toLowerCase() !== 'noun' && !!w.gender;
+
+      if (isMeaningSelfReferential || isDummySentence || isNonNounWithGender) {
+        const dict = lookupWord(cleanWord) || lookupWord(rawWord);
+        let updatedMeaning = w.meaning;
+        let updatedExample = w.exampleSentence;
+        let updatedPos = w.partOfSpeech;
+        let updatedGender = (w.partOfSpeech && w.partOfSpeech.toLowerCase() !== 'noun') ? null : w.gender;
+
+        if (dict) {
+          if (isMeaningSelfReferential || dict.meaning) updatedMeaning = dict.meaning;
+          if (isDummySentence && dict.exampleSentence) updatedExample = dict.exampleSentence;
+          if (dict.partOfSpeech) updatedPos = dict.partOfSpeech;
+          if (dict.partOfSpeech !== 'noun') updatedGender = null;
+          else if (dict.gender) updatedGender = dict.gender;
+        } else if (isMeaningSelfReferential && w.partOfSpeech?.toLowerCase() === 'verb') {
+          const stem = cleanWord.endsWith('en') ? cleanWord.slice(0, -2) : cleanWord;
+          updatedMeaning = `to ${stem}`;
+        }
+
+        if (
+          updatedMeaning !== w.meaning ||
+          updatedExample !== w.exampleSentence ||
+          updatedGender !== w.gender ||
+          updatedPos !== w.partOfSpeech
+        ) {
+          await db
+            .update(userWords)
+            .set({
+              meaning: updatedMeaning,
+              exampleSentence: updatedExample,
+              gender: updatedGender,
+              partOfSpeech: updatedPos,
+            })
+            .where(eq(userWords.id, w.id));
+          totalRepairedWords++;
+        }
+      }
+    }
+
     // Recalculate word counts and learned counts for all user batches
     const userBatches = await db
       .select()
@@ -136,11 +189,12 @@ export async function POST() {
     return NextResponse.json({
       success: true,
       removedDuplicatesCount: totalDuplicatesRemoved,
+      repairedWordsCount: totalRepairedWords,
       affectedSetsCount,
       totalUniqueWords: totalRemainingWords,
       message:
-        totalDuplicatesRemoved > 0
-          ? `Synchronized! Removed ${totalDuplicatesRemoved} duplicate word${totalDuplicatesRemoved !== 1 ? 's' : ''} across your sets.`
+        totalDuplicatesRemoved > 0 || totalRepairedWords > 0
+          ? `Synchronized! Removed ${totalDuplicatesRemoved} duplicate(s) and repaired ${totalRepairedWords} word definition(s).`
           : 'All words are synchronized! No duplicate words found.',
     });
   } catch (error) {

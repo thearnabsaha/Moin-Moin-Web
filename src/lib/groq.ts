@@ -13,6 +13,7 @@ import {
   enrichWordsWithGemini,
   enrichExpressionsWithGemini,
   isGeminiConfigured,
+  fallbackEnrichWord,
 } from './gemini';
 
 let groqInstance: Groq | null = null;
@@ -279,85 +280,7 @@ function parseEnrichResponse(raw: string | null | undefined): EnrichedWord[] {
   }
 }
 
-export function fallbackEnrichWord(rawWord: string): EnrichedWord {
-  const trimmed = rawWord.trim();
-  let word = trimmed;
-  let partOfSpeech: 'noun' | 'verb' | 'adjective' | 'adverb' | 'preposition' | 'conjunction' | 'pronoun' | 'article' | 'other' = 'other';
-  let gender: 'masculine' | 'feminine' | 'neuter' | null = null;
-  const pluralForm: string | null = null;
-  const meaning = trimmed;
-  const cefrLevel: 'A1' | 'A2' | 'B1' | 'B2' = 'A1';
-  let exampleSentence: string | null = null;
-  let verbType: 'regular' | 'irregular' | 'mixed' | null = null;
-  let auxiliaryType: 'haben' | 'sein' | null = null;
-  let presentForm: string | null = null;
-  let simplePast: string | null = null;
-  let perfectForm: string | null = null;
-  let conjugation: Record<string, string> | null = null;
-
-  const matchArticle = trimmed.match(/^(der|die|das)\s+(.+)$/i);
-  if (matchArticle) {
-    const art = matchArticle[1].toLowerCase();
-    const noun = matchArticle[2].trim();
-    const capitalizedNoun = noun.charAt(0).toUpperCase() + noun.slice(1);
-    word = `${art} ${capitalizedNoun}`;
-    partOfSpeech = 'noun';
-    gender = art === 'der' ? 'masculine' : art === 'die' ? 'feminine' : 'neuter';
-    exampleSentence = `Ich lerne das Wort ${word}.`;
-  } else if (/^[A-ZÄÖÜ]/.test(trimmed) && !trimmed.includes(' ')) {
-    if (/ung$|keit$|heit$|schaft$|ion$|ik$|ur$|tät$/i.test(trimmed)) {
-      gender = 'feminine';
-      word = `die ${trimmed}`;
-    } else if (/ling$|or$|ismus$|er$/i.test(trimmed)) {
-      gender = 'masculine';
-      word = `der ${trimmed}`;
-    } else if (/chen$|lein$|ment$|um$|tum$/i.test(trimmed)) {
-      gender = 'neuter';
-      word = `das ${trimmed}`;
-    } else {
-      gender = 'masculine';
-      word = `der ${trimmed}`;
-    }
-    partOfSpeech = 'noun';
-    exampleSentence = `Das ist ${gender === 'masculine' ? 'ein' : gender === 'feminine' ? 'eine' : 'ein'} ${trimmed}.`;
-  } else if (trimmed.endsWith('en') || trimmed.endsWith('eln') || trimmed.endsWith('ern')) {
-    partOfSpeech = 'verb';
-    const stem = trimmed.endsWith('en') ? trimmed.slice(0, -2) : trimmed.slice(0, -1);
-    verbType = 'regular';
-    auxiliaryType = 'haben';
-    presentForm = `${stem}t`;
-    simplePast = `${stem}te`;
-    perfectForm = `hat ge${stem}t`;
-    conjugation = {
-      ich: `${stem}e`,
-      du: `${stem}st`,
-      er: `${stem}t`,
-      wir: `${stem}en`,
-      ihr: `${stem}t`,
-      sie: `${stem}en`,
-    };
-    exampleSentence = `Wir ${trimmed} zusammen.`;
-  } else {
-    partOfSpeech = 'adjective';
-    exampleSentence = `Das ist sehr ${trimmed}.`;
-  }
-
-  return {
-    word,
-    part_of_speech: partOfSpeech,
-    gender,
-    plural_form: pluralForm,
-    conjugation,
-    meaning,
-    cefr_level: cefrLevel,
-    example_sentence: exampleSentence,
-    verb_type: verbType,
-    auxiliary_type: auxiliaryType,
-    present_form: presentForm,
-    simple_past: simplePast,
-    perfect_form: perfectForm,
-  };
-}
+export { fallbackEnrichWord };
 
 async function enrichBatch(words: string[]): Promise<EnrichedWord[]> {
   try {

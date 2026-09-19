@@ -920,7 +920,7 @@ export default function VocabularyPage() {
                                   {word.word}
                                 </span>
                                 <Badge className="font-bold">{word.partOfSpeech}</Badge>
-                                {word.gender && (
+                                {word.partOfSpeech.toLowerCase() === 'noun' && word.gender && (
                                   <Badge className="bg-blue-500/15 text-blue-600 dark:text-blue-400 font-black">
                                     {word.gender}
                                   </Badge>

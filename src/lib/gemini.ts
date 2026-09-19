@@ -6,6 +6,7 @@ import {
   type EnrichedWord,
   type EnrichedExpression,
 } from './validations';
+import { lookupWord } from './dictionary-data';
 
 /**
  * Gemini model cascade ordered by speed, cost-effectiveness, and reliability.
@@ -147,12 +148,14 @@ export async function callGemini(params: CallGeminiParams): Promise<string> {
 const ENRICH_WORD_SYSTEM_PROMPT = `You are a German language lexicography expert. For each German word or phrase provided, return structured linguistic data in valid JSON.
 
 CRITICAL RULES for interpreting input:
+- The "meaning" field MUST ALWAYS be an accurate ENGLISH translation. NEVER return the German word itself as the meaning! (e.g. "geben" -> "to give", NOT "geben"; "gratulieren" -> "to congratulate", NOT "gratulieren"; "gefallen" -> "to please, to like", NOT "gefallen"; "gehören" -> "to belong to", NOT "gehören").
+- ONLY nouns have a gender ("masculine" | "feminine" | "neuter"). For all verbs, adjectives, adverbs, prepositions, conjunctions, and other parts of speech, "gender" MUST BE null. NEVER assign a gender to a verb! (e.g. "versprechen" is a verb, so its gender MUST be null).
 - If the user writes an article + noun (e.g. "die Frau", "der Hund", "das Kind"), treat it as ONE noun entry. The article indicates the gender. The "word" field should be the noun with its article (e.g. "die Frau").
 - If the user writes a BARE noun WITHOUT an article (e.g. "Frau", "Hund", "Kind", "Tisch"), you MUST still return the word field WITH its correct definite article prepended (e.g. "Frau" → word: "die Frau", "Hund" → word: "der Hund", "Kind" → word: "das Kind"). Always add the correct article for nouns.
 - If the user writes a reflexive verb (e.g. "sich freuen", "sich setzen"), treat it as ONE verb entry.
 - Multi-word expressions (e.g. "auf Wiedersehen", "zum Beispiel", "Guten Morgen") should be treated as ONE entry.
 - Separable prefix verbs (e.g. "aufstehen", "ankommen") are single verbs.
-- NEVER split an article+noun, reflexive pronoun+verb, or multi-word phrase into separate entries.
+- "example_sentence" must be an authentic, natural German sentence showing real everyday usage. NEVER output generic placeholders like "Wir [word] zusammen" or "Das ist sehr [word]".
 - Return exactly one entry per numbered input item provided by the user.
 
 Output JSON format:
@@ -164,9 +167,9 @@ Output JSON format:
       "gender": "masculine" | "feminine" | "neuter" | null,
       "plural_form": "string (with article or noun form, or null if not noun)",
       "conjugation": {"ich": "...", "du": "...", "er": "...", "wir": "...", "ihr": "...", "sie": "..."} | null,
-      "meaning": "concise English translation",
+      "meaning": "concise accurate English translation",
       "cefr_level": "A1" | "A2" | "B1" | "B2",
-      "example_sentence": "simple natural German example sentence",
+      "example_sentence": "natural German example sentence",
       "verb_type": "regular" | "irregular" | "mixed" | null,
       "auxiliary_type": "haben" | "sein" | null,
       "present_form": "3rd person singular present (e.g. läuft) or null",
@@ -178,11 +181,38 @@ Output JSON format:
 
 export function fallbackEnrichWord(rawWord: string): EnrichedWord {
   const trimmed = rawWord.trim();
+  const cleanWord = trimmed.replace(/^(der|die|das)\s+/i, '').trim().toLowerCase();
+  const dictEntry = lookupWord(cleanWord);
+
+  if (dictEntry) {
+    let word = trimmed;
+    if (dictEntry.partOfSpeech === 'noun' && !/^(der|die|das)\s+/i.test(trimmed)) {
+      const art = dictEntry.gender === 'feminine' ? 'die' : dictEntry.gender === 'neuter' ? 'das' : 'der';
+      const capitalized = cleanWord.charAt(0).toUpperCase() + cleanWord.slice(1);
+      word = `${art} ${capitalized}`;
+    }
+    return {
+      word,
+      part_of_speech: dictEntry.partOfSpeech,
+      gender: dictEntry.partOfSpeech === 'noun' ? (dictEntry.gender ?? null) : null,
+      plural_form: dictEntry.pluralForm ?? null,
+      meaning: dictEntry.meaning,
+      cefr_level: dictEntry.cefrLevel ?? 'A1',
+      example_sentence: dictEntry.exampleSentence ?? `Ich verwende das Wort "${word}".`,
+      verb_type: dictEntry.verbType ?? null,
+      auxiliary_type: dictEntry.auxiliaryType ?? null,
+      present_form: null,
+      simple_past: null,
+      perfect_form: null,
+      conjugation: null,
+    };
+  }
+
   let word = trimmed;
   let partOfSpeech: 'noun' | 'verb' | 'adjective' | 'adverb' | 'preposition' | 'conjunction' | 'pronoun' | 'article' | 'other' = 'other';
   let gender: 'masculine' | 'feminine' | 'neuter' | null = null;
   const pluralForm: string | null = null;
-  const meaning = trimmed;
+  let meaning = '';
   const cefrLevel: 'A1' | 'A2' | 'B1' | 'B2' = 'A1';
   let exampleSentence: string | null = null;
   let verbType: 'regular' | 'irregular' | 'mixed' | null = null;
@@ -200,12 +230,13 @@ export function fallbackEnrichWord(rawWord: string): EnrichedWord {
     word = `${art} ${capitalizedNoun}`;
     partOfSpeech = 'noun';
     gender = art === 'der' ? 'masculine' : art === 'die' ? 'feminine' : 'neuter';
-    exampleSentence = `Ich lerne das Wort ${word}.`;
+    meaning = capitalizedNoun;
+    exampleSentence = `Das ist ${gender === 'masculine' ? 'ein' : gender === 'feminine' ? 'eine' : 'ein'} ${capitalizedNoun}.`;
   } else if (/^[A-ZÄÖÜ]/.test(trimmed) && !trimmed.includes(' ')) {
     if (/ung$|keit$|heit$|schaft$|ion$|ik$|ur$|tät$/i.test(trimmed)) {
       gender = 'feminine';
       word = `die ${trimmed}`;
-    } else if (/ling$|or$|ismus$|er$/i.test(trimmed)) {
+    } else if (/ling$|or$|ismus$/i.test(trimmed)) {
       gender = 'masculine';
       word = `der ${trimmed}`;
     } else if (/chen$|lein$|ment$|um$|tum$/i.test(trimmed)) {
@@ -216,15 +247,18 @@ export function fallbackEnrichWord(rawWord: string): EnrichedWord {
       word = `der ${trimmed}`;
     }
     partOfSpeech = 'noun';
+    meaning = trimmed;
     exampleSentence = `Das ist ${gender === 'masculine' ? 'ein' : gender === 'feminine' ? 'eine' : 'ein'} ${trimmed}.`;
   } else if (trimmed.endsWith('en') || trimmed.endsWith('eln') || trimmed.endsWith('ern')) {
     partOfSpeech = 'verb';
+    gender = null; // Verbs NEVER have a gender
     const stem = trimmed.endsWith('en') ? trimmed.slice(0, -2) : trimmed.slice(0, -1);
     verbType = 'regular';
     auxiliaryType = 'haben';
     presentForm = `${stem}t`;
     simplePast = `${stem}te`;
     perfectForm = `hat ge${stem}t`;
+    meaning = `to ${stem}`;
     conjugation = {
       ich: `${stem}e`,
       du: `${stem}st`,
@@ -233,10 +267,12 @@ export function fallbackEnrichWord(rawWord: string): EnrichedWord {
       ihr: `${stem}t`,
       sie: `${stem}en`,
     };
-    exampleSentence = `Wir ${trimmed} zusammen.`;
+    exampleSentence = `Ich möchte gerne ${trimmed}.`;
   } else {
     partOfSpeech = 'adjective';
-    exampleSentence = `Das ist sehr ${trimmed}.`;
+    gender = null;
+    meaning = trimmed;
+    exampleSentence = `Das ist ${trimmed}.`;
   }
 
   return {
@@ -256,6 +292,47 @@ export function fallbackEnrichWord(rawWord: string): EnrichedWord {
   };
 }
 
+function sanitizeEnrichedItem(item: Record<string, unknown>): void {
+  if (!item || typeof item !== 'object') return;
+
+  // 1. Enforce gender = null and plural_form = null on all non-nouns (e.g. versprechen is a verb)
+  const pos = String(item.part_of_speech || '').toLowerCase().trim();
+  if (pos !== 'noun') {
+    item.gender = null;
+    item.plural_form = null;
+  }
+
+  // 2. Fix identical or empty meaning
+  const rawWord = String(item.word || '').trim();
+  const cleanWord = rawWord.replace(/^(der|die|das)\s+/i, '').trim().toLowerCase();
+  const rawMeaning = String(item.meaning || '').trim().toLowerCase();
+
+  if (!rawMeaning || rawMeaning === cleanWord || rawMeaning === rawWord.toLowerCase()) {
+    const dict = lookupWord(cleanWord);
+    if (dict) {
+      item.meaning = dict.meaning;
+      if (dict.partOfSpeech) item.part_of_speech = dict.partOfSpeech;
+      if (!item.example_sentence || String(item.example_sentence).includes('zusammen.')) {
+        item.example_sentence = dict.exampleSentence;
+      }
+    } else if (pos === 'verb') {
+      const stem = cleanWord.endsWith('en') ? cleanWord.slice(0, -2) : cleanWord;
+      item.meaning = `to ${stem}`;
+    }
+  }
+
+  // 3. Fix placeholder example sentences
+  if (
+    typeof item.example_sentence === 'string' &&
+    (item.example_sentence.includes('zusammen.') || item.example_sentence.includes('Das ist sehr'))
+  ) {
+    const dict = lookupWord(cleanWord);
+    if (dict?.exampleSentence) {
+      item.example_sentence = dict.exampleSentence;
+    }
+  }
+}
+
 function parseEnrichWordResponse(raw: string | null | undefined): EnrichedWord[] {
   if (!raw) {
     console.error('[Gemini:enrichWords] Empty raw response');
@@ -271,6 +348,11 @@ function parseEnrichWordResponse(raw: string | null | undefined): EnrichedWord[]
     if (!wordsArray || !Array.isArray(wordsArray)) {
       console.error('[Gemini:enrichWords] No words array found. Keys:', Object.keys(parsed));
       return [];
+    }
+
+    // Sanitize before validation
+    for (const item of wordsArray) {
+      sanitizeEnrichedItem(item);
     }
 
     const batchResult = enrichedWordsResponseSchema.safeParse({ words: wordsArray });
