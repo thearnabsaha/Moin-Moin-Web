@@ -57,14 +57,30 @@ async function probeGemini(): Promise<AiServiceStatus> {
 
       if (response.status === 429) {
         const errorText = await response.text();
+        let friendlyMsg = 'Daily free-tier quota exceeded (limit: 20 req/day). Groq fallback is active.';
+        let resetTime: string | null = null;
+        try {
+          const jsonErr = JSON.parse(errorText);
+          const rawMsg = jsonErr?.error?.message || '';
+          const matchRetry = rawMsg.match(/Please retry in ([^.]+)/i);
+          if (matchRetry) {
+            resetTime = matchRetry[1].trim();
+            friendlyMsg = `Daily quota reached (20/day). Resets in ${resetTime}. Groq fallback is active.`;
+          }
+        } catch {}
+
         lastStatus = {
           name: 'Google Gemini',
           configured: true,
           status: 'rate_limited',
           latencyMs,
           model,
-          error: `Rate limited (429): ${errorText.slice(0, 100)}`,
-          rateLimitInfo,
+          error: friendlyMsg,
+          rateLimitInfo: {
+            remaining: 0,
+            limit: 20,
+            resetAt: resetTime,
+          },
         };
         continue;
       }
