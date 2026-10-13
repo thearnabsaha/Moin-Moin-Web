@@ -24,82 +24,98 @@ async function probeGemini(): Promise<AiServiceStatus> {
     return { name: 'Google Gemini', configured: false, status: 'unconfigured', latencyMs: null, model: null, error: null, rateLimitInfo: null };
   }
 
-  const model = 'gemini-3.5-flash';
-  const url = `${GEMINI_API_URL}/${model}:generateContent?key=${apiKey}`;
-  const start = Date.now();
+  const candidateModels = ['gemini-3.6-flash', 'gemini-3.8-flash', 'gemini-flash-latest'];
+  let lastStatus: AiServiceStatus | null = null;
 
-  try {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 8000);
+  for (const model of candidateModels) {
+    const url = `${GEMINI_API_URL}/${model}:generateContent?key=${apiKey}`;
+    const start = Date.now();
 
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: 'Reply with exactly: {"status":"ok"}' }] }],
-        generationConfig: { responseMimeType: 'application/json', temperature: 0, maxOutputTokens: 10 },
-      }),
-      signal: controller.signal,
-    });
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 8000);
 
-    clearTimeout(timer);
-    const latencyMs = Date.now() - start;
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: 'Reply with exactly: {"status":"ok"}' }] }],
+          generationConfig: { responseMimeType: 'application/json', temperature: 0, maxOutputTokens: 10 },
+        }),
+        signal: controller.signal,
+      });
 
-    // Extract rate limit headers
-    const rateLimitInfo = {
-      remaining: response.headers.get('x-ratelimit-remaining') ? parseInt(response.headers.get('x-ratelimit-remaining')!) : null,
-      limit: response.headers.get('x-ratelimit-limit') ? parseInt(response.headers.get('x-ratelimit-limit')!) : null,
-      resetAt: response.headers.get('x-ratelimit-reset') || response.headers.get('retry-after') || null,
-    };
+      clearTimeout(timer);
+      const latencyMs = Date.now() - start;
 
-    if (response.status === 429) {
-      const errorText = await response.text();
+      // Extract rate limit headers
+      const rateLimitInfo = {
+        remaining: response.headers.get('x-ratelimit-remaining') ? parseInt(response.headers.get('x-ratelimit-remaining')!) : null,
+        limit: response.headers.get('x-ratelimit-limit') ? parseInt(response.headers.get('x-ratelimit-limit')!) : null,
+        resetAt: response.headers.get('x-ratelimit-reset') || response.headers.get('retry-after') || null,
+      };
+
+      if (response.status === 429) {
+        const errorText = await response.text();
+        lastStatus = {
+          name: 'Google Gemini',
+          configured: true,
+          status: 'rate_limited',
+          latencyMs,
+          model,
+          error: `Rate limited (429): ${errorText.slice(0, 100)}`,
+          rateLimitInfo,
+        };
+        continue;
+      }
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        lastStatus = {
+          name: 'Google Gemini',
+          configured: true,
+          status: 'error',
+          latencyMs,
+          model,
+          error: `HTTP ${response.status}: ${errorText.slice(0, 100)}`,
+          rateLimitInfo,
+        };
+        continue;
+      }
+
       return {
         name: 'Google Gemini',
         configured: true,
-        status: 'rate_limited',
+        status: 'operational',
         latencyMs,
         model,
-        error: `Rate limited (429): ${errorText.slice(0, 100)}`,
+        error: null,
         rateLimitInfo,
       };
-    }
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      return {
+    } catch (err) {
+      const latencyMs = Date.now() - start;
+      const message = err instanceof Error ? err.message : 'Unknown error';
+      lastStatus = {
         name: 'Google Gemini',
         configured: true,
         status: 'error',
         latencyMs,
         model,
-        error: `HTTP ${response.status}: ${errorText.slice(0, 100)}`,
-        rateLimitInfo,
+        error: message.includes('abort') ? 'Timeout (>8s)' : message.slice(0, 100),
+        rateLimitInfo: null,
       };
     }
-
-    return {
-      name: 'Google Gemini',
-      configured: true,
-      status: 'operational',
-      latencyMs,
-      model,
-      error: null,
-      rateLimitInfo,
-    };
-  } catch (err) {
-    const latencyMs = Date.now() - start;
-    const message = err instanceof Error ? err.message : 'Unknown error';
-    return {
-      name: 'Google Gemini',
-      configured: true,
-      status: 'error',
-      latencyMs,
-      model,
-      error: message.includes('abort') ? 'Timeout (>8s)' : message.slice(0, 100),
-      rateLimitInfo: null,
-    };
   }
+
+  return lastStatus || {
+    name: 'Google Gemini',
+    configured: true,
+    status: 'error',
+    latencyMs: null,
+    model: candidateModels[0],
+    error: 'All candidate models unavailable',
+    rateLimitInfo: null,
+  };
 }
 
 async function probeGroq(): Promise<AiServiceStatus> {

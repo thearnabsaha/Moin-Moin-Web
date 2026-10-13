@@ -114,6 +114,10 @@ export default function VocabularyPage() {
   const [editSetWordSentence, setEditSetWordSentence] = useState('');
   const [savingSetWord, setSavingSetWord] = useState(false);
 
+  // Recheck State (powerful AI)
+  const [recheckingWordId, setRecheckingWordId] = useState<string | null>(null);
+  const [recheckingSetId, setRecheckingSetId] = useState<string | null>(null);
+
   // Pronounce TTS
   const speak = useCallback((text: string) => {
     if (typeof window === 'undefined' || !('speechSynthesis' in window)) return;
@@ -401,6 +405,83 @@ export default function VocabularyPage() {
       }
     } catch {
       toast.error('Failed to delete word');
+    }
+  };
+
+  // Recheck Word in Set with Powerful AI
+  const handleRecheckWordInSet = async (setId: string, wordId: string, wordText: string) => {
+    setRecheckingWordId(wordId);
+    const toastId = toast.loading(`Rechecking "${wordText}" with AI...`);
+    try {
+      const res = await fetch(`/api/vocabulary/sets/${setId}/words/${wordId}/recheck`, {
+        method: 'POST',
+      });
+      const data = await res.json();
+      toast.dismiss(toastId);
+      if (!res.ok) {
+        toast.error(data.error || `Failed to recheck "${wordText}"`);
+        return;
+      }
+      toast.success(`Updated "${wordText}": ${data.word?.meaning || 'enriched'}`);
+      await fetchSets(true);
+      await fetchWords(true);
+    } catch {
+      toast.dismiss(toastId);
+      toast.error(`Failed to recheck "${wordText}"`);
+    } finally {
+      setRecheckingWordId(null);
+    }
+  };
+
+  // Recheck Word in General Library with Powerful AI
+  const handleRecheckGeneralWord = async (wordId: string, wordText: string) => {
+    setRecheckingWordId(wordId);
+    const toastId = toast.loading(`Rechecking "${wordText}" with AI...`);
+    try {
+      const res = await fetch('/api/vocabulary/recheck', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: wordId }),
+      });
+      const data = await res.json();
+      toast.dismiss(toastId);
+      if (!res.ok) {
+        toast.error(data.error || `Failed to recheck "${wordText}"`);
+        return;
+      }
+      toast.success(`Updated "${wordText}": ${data.word?.meaning || 'enriched'}`);
+      await fetchWords(true);
+      await fetchSets(true);
+    } catch {
+      toast.dismiss(toastId);
+      toast.error(`Failed to recheck "${wordText}"`);
+    } finally {
+      setRecheckingWordId(null);
+    }
+  };
+
+  // Recheck Entire Set with Powerful AI
+  const handleRecheckSet = async (setId: string, setName: string) => {
+    setRecheckingSetId(setId);
+    const toastId = toast.loading(`Rechecking all words in "${setName}" with AI...`);
+    try {
+      const res = await fetch(`/api/vocabulary/sets/${setId}/recheck`, {
+        method: 'POST',
+      });
+      const data = await res.json();
+      toast.dismiss(toastId);
+      if (!res.ok) {
+        toast.error(data.error || `Failed to recheck set "${setName}"`);
+        return;
+      }
+      toast.success(`Rechecked ${data.count ?? 'all'} words in "${setName}"!`);
+      await fetchSets(true);
+      await fetchWords(true);
+    } catch {
+      toast.dismiss(toastId);
+      toast.error(`Failed to recheck set "${setName}"`);
+    } finally {
+      setRecheckingSetId(null);
     }
   };
 
@@ -723,6 +804,21 @@ export default function VocabularyPage() {
                               </p>
                             </div>
 
+                            {/* Recheck Entire Set Button */}
+                            <button
+                              onClick={() => handleRecheckSet(set.id, set.name)}
+                              disabled={recheckingSetId === set.id}
+                              className="flex h-8 w-8 items-center justify-center rounded-xl text-[var(--text-tertiary)] hover:bg-[var(--accent)]/10 hover:text-[var(--accent)] transition-colors"
+                              title="Recheck all words in set with powerful AI"
+                              aria-label="Recheck set with AI"
+                            >
+                              {recheckingSetId === set.id ? (
+                                <Loader2 size={15} className="animate-spin text-[var(--accent)]" />
+                              ) : (
+                                <Sparkles size={15} />
+                              )}
+                            </button>
+
                             {/* Delete Set Button */}
                             <button
                               onClick={() => handleDeleteSet(set.id, set.name)}
@@ -873,6 +969,19 @@ export default function VocabularyPage() {
                                               <Pencil size={12} />
                                             </button>
                                           )}
+                                          <button
+                                            onClick={() => handleRecheckWordInSet(set.id, w.id, w.word)}
+                                            disabled={recheckingWordId === w.id}
+                                            className="flex h-7 w-7 items-center justify-center rounded-lg text-[var(--text-tertiary)] hover:bg-[var(--accent)]/10 hover:text-[var(--accent)] transition-colors"
+                                            title="Recheck with powerful AI"
+                                            aria-label="Recheck with AI"
+                                          >
+                                            {recheckingWordId === w.id ? (
+                                              <Loader2 size={12} className="animate-spin text-[var(--accent)]" />
+                                            ) : (
+                                              <Sparkles size={12} />
+                                            )}
+                                          </button>
                                           <button
                                             onClick={() => handleDeleteWordFromSet(set.id, w.id, w.word)}
                                             className="flex h-7 w-7 items-center justify-center rounded-lg text-[var(--text-tertiary)] hover:bg-red-500/10 hover:text-red-500 transition-colors"
@@ -1094,6 +1203,19 @@ export default function VocabularyPage() {
                                     <Pencil size={15} />
                                   </button>
                                 )}
+                                <button
+                                  onClick={() => handleRecheckGeneralWord(word.id, word.word)}
+                                  disabled={recheckingWordId === word.id}
+                                  className="flex h-9 w-9 items-center justify-center rounded-xl text-[var(--text-tertiary)] hover:bg-[var(--accent)]/10 hover:text-[var(--accent)] transition-colors"
+                                  title="Recheck with powerful AI"
+                                  aria-label="Recheck with AI"
+                                >
+                                  {recheckingWordId === word.id ? (
+                                    <Loader2 size={15} className="animate-spin text-[var(--accent)]" />
+                                  ) : (
+                                    <Sparkles size={15} />
+                                  )}
+                                </button>
                                 <button
                                   onClick={() => handleDeleteGeneralWord(word.id)}
                                   className="flex h-9 w-9 items-center justify-center rounded-xl text-[var(--text-tertiary)] transition-colors hover:bg-red-500/10 hover:text-red-500"

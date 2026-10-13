@@ -14,11 +14,11 @@ import { normalizeWord } from './word-parser';
  * gemini-3.8-flash is Google's premier, state-of-the-art model with advanced multilingual reasoning.
  */
 const GEMINI_MODELS = [
-  'gemini-3.5-flash',
-  'gemini-3.6-flash',
-  'gemini-3.5-flash-lite',
-  'gemini-flash-latest',
   'gemini-3.8-flash',
+  'gemini-3.7-flash',
+  'gemini-3.6-flash',
+  'gemini-flash-latest',
+  'gemini-pro-latest',
 ] as const;
 
 /**
@@ -92,7 +92,7 @@ export async function callGemini(params: CallAiParams): Promise<string> {
     prompt,
     temperature = 0.1,
     responseMimeType = 'application/json',
-    timeoutMs = 4_500,
+    timeoutMs = 12_000,
     preferredModel,
   } = params;
 
@@ -604,9 +604,19 @@ function reconcileWordBatch(words: string[], parsed: EnrichedWord[]): EnrichedWo
   return result;
 }
 
-async function enrichWordBatch(words: string[]): Promise<EnrichedWord[]> {
+export interface EnrichWordOptions {
+  preferredModel?: string;
+  timeoutMs?: number;
+  powerful?: boolean;
+}
+
+async function enrichWordBatch(words: string[], options?: EnrichWordOptions): Promise<EnrichedWord[]> {
   const listPrompt = words.map((w, i) => `${i + 1}. ${w}`).join('\n');
   const prompt = `Provide linguistic data with spelling corrections for each of these German words/phrases (return exactly ${words.length} items, one per numbered entry in the same order):\n${listPrompt}`;
+
+  const preferredModel = options?.preferredModel || (options?.powerful ? 'gemini-3.8-flash' : undefined);
+  const timeoutMs = options?.timeoutMs || (options?.powerful ? 15_000 : 12_000);
+  const temperature = options?.powerful ? 0.0 : 0.1;
 
   // 1. Primary AI: Google Gemini premier model cascade (gemini-3.8-flash, etc.)
   if (isGeminiConfigured()) {
@@ -614,8 +624,10 @@ async function enrichWordBatch(words: string[]): Promise<EnrichedWord[]> {
       const rawResponse = await callGemini({
         systemInstruction: ENRICH_WORD_SYSTEM_PROMPT,
         prompt,
-        temperature: 0.1,
+        temperature,
         responseMimeType: 'application/json',
+        preferredModel,
+        timeoutMs,
       });
 
       const parsed = parseEnrichWordResponse(rawResponse);
@@ -633,7 +645,7 @@ async function enrichWordBatch(words: string[]): Promise<EnrichedWord[]> {
       const rawGroq = await callGroqFallback({
         systemInstruction: ENRICH_WORD_SYSTEM_PROMPT,
         prompt,
-        temperature: 0.1,
+        temperature,
       });
 
       const parsedGroq = parseEnrichWordResponse(rawGroq);
@@ -652,11 +664,14 @@ async function enrichWordBatch(words: string[]): Promise<EnrichedWord[]> {
 /**
  * Enriches German words with premier AI models (gender, articles, CEFR level, conjugations, examples).
  */
-export async function enrichWordsWithGemini(words: string[]): Promise<EnrichedWord[]> {
+export async function enrichWordsWithGemini(
+  words: string[],
+  options?: EnrichWordOptions
+): Promise<EnrichedWord[]> {
   if (words.length === 0) return [];
 
   if (words.length <= BATCH_SIZE) {
-    return enrichWordBatch(words);
+    return enrichWordBatch(words, options);
   }
 
   const chunks: string[][] = [];
@@ -670,7 +685,7 @@ export async function enrichWordsWithGemini(words: string[]): Promise<EnrichedWo
   for (let i = 0; i < chunks.length; i += MAX_CONCURRENT_BATCHES) {
     const concurrentChunks = chunks.slice(i, i + MAX_CONCURRENT_BATCHES);
     const batchResults = await Promise.allSettled(
-      concurrentChunks.map((chunk) => enrichWordBatch(chunk))
+      concurrentChunks.map((chunk) => enrichWordBatch(chunk, options))
     );
 
     for (let idx = 0; idx < batchResults.length; idx++) {
