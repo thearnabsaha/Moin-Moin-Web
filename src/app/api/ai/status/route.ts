@@ -24,7 +24,7 @@ async function probeGemini(): Promise<AiServiceStatus> {
     return { name: 'Google Gemini', configured: false, status: 'unconfigured', latencyMs: null, model: null, error: null, rateLimitInfo: null };
   }
 
-  const model = 'gemini-3.5-flash-lite';
+  const model = 'gemini-3.5-flash';
   const url = `${GEMINI_API_URL}/${model}:generateContent?key=${apiKey}`;
   const start = Date.now();
 

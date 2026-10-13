@@ -14,10 +14,10 @@ import { normalizeWord } from './word-parser';
  * gemini-3.8-flash is Google's premier, state-of-the-art model with advanced multilingual reasoning.
  */
 const GEMINI_MODELS = [
-  'gemini-3.5-flash-lite',
-  'gemini-flash-latest',
   'gemini-3.5-flash',
   'gemini-3.6-flash',
+  'gemini-3.5-flash-lite',
+  'gemini-flash-latest',
   'gemini-3.8-flash',
 ] as const;
 
