@@ -130,35 +130,39 @@ export default function VocabularyPage() {
     } catch {}
   }, []);
 
-  // Fetch Word Sets
-  const fetchSets = useCallback(async (forceRefresh = false) => {
+  // Fetch Word Sets (silent = true prevents skeleton unmount/flicker)
+  const fetchSets = useCallback(async (forceRefresh = false, silent = false) => {
     if (forceRefresh) invalidateCache('/api/vocabulary/sets');
-    setSetsLoading(true);
+    if (!silent) setSetsLoading(true);
     try {
       const data = await cachedFetch<{ sets: WordSet[] }>('/api/vocabulary/sets', 30000);
       setSets(data.sets || []);
     } catch {
-      setSets([]);
-      toast.error('Failed to load word sets');
+      if (!silent) {
+        setSets([]);
+        toast.error('Failed to load word sets');
+      }
     } finally {
-      setSetsLoading(false);
+      if (!silent) setSetsLoading(false);
     }
   }, []);
 
-  // Fetch All Words
-  const fetchWords = useCallback(async (forceRefresh = false) => {
+  // Fetch All Words (silent = true prevents skeleton unmount/flicker)
+  const fetchWords = useCallback(async (forceRefresh = false, silent = false) => {
     if (forceRefresh) invalidateCache('/api/vocabulary');
-    setLibraryLoading(true);
+    if (!silent) setLibraryLoading(true);
     try {
       const data = await cachedFetch<{ words: UserWord[]; analytics: Analytics }>('/api/vocabulary', 30000);
       setWords(data.words || []);
       setAnalytics(data.analytics || null);
     } catch {
-      setWords([]);
-      setAnalytics(null);
-      toast.error('Failed to load vocabulary');
+      if (!silent) {
+        setWords([]);
+        setAnalytics(null);
+        toast.error('Failed to load vocabulary');
+      }
     } finally {
-      setLibraryLoading(false);
+      if (!silent) setLibraryLoading(false);
     }
   }, []);
 
@@ -190,8 +194,8 @@ export default function VocabularyPage() {
         toast.success('All words are synchronized! No duplicate words found.');
       }
 
-      await fetchSets();
-      await fetchWords();
+      await fetchSets(true, true);
+      await fetchWords(true, true);
     } catch {
       toast.dismiss(toastId);
       toast.error('Failed to synchronize words');
@@ -243,8 +247,8 @@ export default function VocabularyPage() {
       setNewSetName('');
       setNewSetWords('');
       setIsCreateOpen(false);
-      await fetchSets();
-      await fetchWords();
+      await fetchSets(true, true);
+      await fetchWords(true, true);
     } catch {
       toast.dismiss(toastId);
       toast.error('Failed to create set (request timed out or failed)');
@@ -255,41 +259,52 @@ export default function VocabularyPage() {
 
   // Rename Word Set
   const handleRenameSet = async (setId: string) => {
-    if (!editSetName.trim()) return;
+    const trimmed = editSetName.trim();
+    if (!trimmed) return;
+    // Optimistic in-place update
+    setSets((prev) => prev.map((s) => (s.id === setId ? { ...s, name: trimmed } : s)));
+    setEditingSetId(null);
+    setEditSetName('');
     try {
       const res = await fetch(`/api/vocabulary/sets/${setId}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: editSetName.trim() }),
+        body: JSON.stringify({ name: trimmed }),
       });
       const data = await res.json();
       if (!res.ok) {
         toast.error(data.error || 'Failed to rename set');
+        await fetchSets(true, true);
         return;
       }
       toast.success('Word set renamed!');
-      setEditingSetId(null);
-      setEditSetName('');
-      await fetchSets();
+      await fetchSets(true, true);
     } catch {
       toast.error('Failed to rename set');
+      await fetchSets(true, true);
     }
   };
 
   // Delete Word Set
   const handleDeleteSet = async (setId: string, setName: string) => {
     if (!confirm(`Are you sure you want to delete the set "${setName}" and its words?`)) return;
+    // Optimistic in-place removal
+    setSets((prev) => prev.filter((s) => s.id !== setId));
     try {
       const res = await fetch(`/api/vocabulary/sets/${setId}`, { method: 'DELETE' });
       if (!res.ok) {
         toast.error('Failed to delete set');
+        await fetchSets(true, true);
+        await fetchWords(true, true);
         return;
       }
       toast.success(`Deleted set "${setName}"`);
-      await fetchSets();
-      await fetchWords();
+      await fetchSets(true, true);
+      await fetchWords(true, true);
     } catch {
       toast.error('Failed to delete set');
+      await fetchSets(true, true);
+      await fetchWords(true, true);
     }
   };
 
@@ -301,7 +316,7 @@ export default function VocabularyPage() {
       return;
     }
     setAddingWordsLoading(true);
-    const toastId = toast.loading('Enriching and adding words with Gemini AI...');
+    const toastId = toast.loading('Enriching and adding words with AI...');
 
     try {
       const res = await fetch(`/api/vocabulary/sets/${setId}/words`, {
@@ -323,8 +338,8 @@ export default function VocabularyPage() {
 
       setMoreWordsInput('');
       setAddingWordsSetId(null);
-      await fetchSets();
-      await fetchWords();
+      await fetchSets(true, true);
+      await fetchWords(true, true);
     } catch {
       toast.dismiss(toastId);
       toast.error('Failed to add words to set');
@@ -335,76 +350,159 @@ export default function VocabularyPage() {
 
   // Delete Individual Word from Set
   const handleDeleteWordFromSet = async (setId: string, wordId: string, wordText: string) => {
+    // Optimistic in-place removal
+    setSets((prev) =>
+      prev.map((s) =>
+        s.id === setId
+          ? {
+              ...s,
+              wordCount: Math.max(0, s.wordCount - 1),
+              words: (s.words || []).filter((w) => w.id !== wordId),
+            }
+          : s
+      )
+    );
     try {
       const res = await fetch(`/api/vocabulary/sets/${setId}/words/${wordId}`, { method: 'DELETE' });
       if (!res.ok) {
         toast.error('Failed to remove word');
+        await fetchSets(true, true);
         return;
       }
       toast.success(`Removed "${wordText}" from set`);
-      await fetchSets();
-      await fetchWords();
+      await fetchSets(true, true);
+      await fetchWords(true, true);
     } catch {
       toast.error('Failed to remove word');
+      await fetchSets(true, true);
     }
   };
 
   // Save Edited Word (General Library)
   const handleSaveWordEdit = async (wordId: string) => {
     if (!editMeaning.trim()) { toast.error('Meaning cannot be empty'); return; }
+    const trimmedMeaning = editMeaning.trim();
+    const trimmedSentence = editSentence.trim() || null;
+
+    // Optimistic in-place update: zero reload, zero scroll jump!
+    setWords((prev) =>
+      prev.map((w) =>
+        w.id === wordId ? { ...w, meaning: trimmedMeaning, exampleSentence: trimmedSentence } : w
+      )
+    );
+    setSets((prev) =>
+      prev.map((s) => ({
+        ...s,
+        words: (s.words || []).map((w) =>
+          w.id === wordId ? { ...w, meaning: trimmedMeaning, exampleSentence: trimmedSentence } : w
+        ),
+      }))
+    );
+
+    setEditingWordId(null);
+    setEditMeaning('');
+    setEditSentence('');
     setSavingWord(true);
+
     try {
       const res = await fetch('/api/vocabulary', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id: wordId, meaning: editMeaning.trim(), exampleSentence: editSentence.trim() || null }),
+        body: JSON.stringify({ id: wordId, meaning: trimmedMeaning, exampleSentence: trimmedSentence }),
       });
       const data = await res.json();
-      if (!res.ok) { toast.error(data.error || 'Failed to save'); return; }
+      if (!res.ok) {
+        toast.error(data.error || 'Failed to save');
+        await fetchWords(true, true);
+        return;
+      }
       toast.success('Word updated!');
-      setEditingWordId(null);
-      setEditMeaning('');
-      setEditSentence('');
-      await fetchWords();
-    } catch { toast.error('Failed to save word'); }
-    finally { setSavingWord(false); }
+      await fetchWords(true, true);
+    } catch {
+      toast.error('Failed to save word');
+      await fetchWords(true, true);
+    } finally {
+      setSavingWord(false);
+    }
   };
 
   // Save Edited Word (Set Inspector)
   const handleSaveSetWordEdit = async (setId: string, wordId: string) => {
     if (!editSetWordMeaning.trim()) { toast.error('Meaning cannot be empty'); return; }
+    const trimmedMeaning = editSetWordMeaning.trim();
+    const trimmedSentence = editSetWordSentence.trim() || null;
+
+    // Optimistic in-place update: zero reload, zero scroll jump!
+    setSets((prev) =>
+      prev.map((s) =>
+        s.id === setId
+          ? {
+              ...s,
+              words: (s.words || []).map((w) =>
+                w.id === wordId ? { ...w, meaning: trimmedMeaning, exampleSentence: trimmedSentence } : w
+              ),
+            }
+          : s
+      )
+    );
+    setWords((prev) =>
+      prev.map((w) =>
+        w.id === wordId ? { ...w, meaning: trimmedMeaning, exampleSentence: trimmedSentence } : w
+      )
+    );
+
+    setEditingSetWordKey(null);
+    setEditSetWordMeaning('');
+    setEditSetWordSentence('');
     setSavingSetWord(true);
+
     try {
       const res = await fetch(`/api/vocabulary/sets/${setId}/words/${wordId}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ meaning: editSetWordMeaning.trim(), exampleSentence: editSetWordSentence.trim() || null }),
+        body: JSON.stringify({ meaning: trimmedMeaning, exampleSentence: trimmedSentence }),
       });
       const data = await res.json();
-      if (!res.ok) { toast.error(data.error || 'Failed to save'); return; }
+      if (!res.ok) {
+        toast.error(data.error || 'Failed to save');
+        await fetchSets(true, true);
+        return;
+      }
       toast.success('Word updated!');
-      setEditingSetWordKey(null);
-      setEditSetWordMeaning('');
-      setEditSetWordSentence('');
-      await fetchSets();
-      await fetchWords();
-    } catch { toast.error('Failed to save word'); }
-    finally { setSavingSetWord(false); }
+      await fetchSets(true, true);
+      await fetchWords(true, true);
+    } catch {
+      toast.error('Failed to save word');
+      await fetchSets(true, true);
+    } finally {
+      setSavingSetWord(false);
+    }
   };
 
   // Delete Word from General Library
   const handleDeleteGeneralWord = async (id: string) => {
+    // Optimistic in-place removal: zero reload, zero flicker!
+    setWords((prev) => prev.filter((w) => w.id !== id));
+    setSets((prev) =>
+      prev.map((s) => ({
+        ...s,
+        words: (s.words || []).filter((w) => w.id !== id),
+      }))
+    );
+
     try {
       const res = await fetch(`/api/vocabulary?id=${id}`, { method: 'DELETE' });
       if (res.ok) {
         toast.success('Word removed');
-        await fetchWords();
-        await fetchSets();
+        await fetchWords(true, true);
+        await fetchSets(true, true);
       } else {
         toast.error('Failed to delete word');
+        await fetchWords(true, true);
       }
     } catch {
       toast.error('Failed to delete word');
+      await fetchWords(true, true);
     }
   };
 
@@ -422,9 +520,24 @@ export default function VocabularyPage() {
         toast.error(data.error || `Failed to recheck "${wordText}"`);
         return;
       }
+      const updatedWord = data.word;
+      if (updatedWord) {
+        // In-place update: zero reload, zero scroll jump!
+        setSets((prev) =>
+          prev.map((s) =>
+            s.id === setId
+              ? {
+                  ...s,
+                  words: (s.words || []).map((w) => (w.id === wordId ? { ...w, ...updatedWord } : w)),
+                }
+              : s
+          )
+        );
+        setWords((prev) => prev.map((w) => (w.id === wordId ? { ...w, ...updatedWord } : w)));
+      }
       toast.success(`Updated "${wordText}": ${data.word?.meaning || 'enriched'}`);
-      await fetchSets(true);
-      await fetchWords(true);
+      await fetchSets(true, true);
+      await fetchWords(true, true);
     } catch {
       toast.dismiss(toastId);
       toast.error(`Failed to recheck "${wordText}"`);
@@ -449,9 +562,20 @@ export default function VocabularyPage() {
         toast.error(data.error || `Failed to recheck "${wordText}"`);
         return;
       }
+      const updatedWord = data.word;
+      if (updatedWord) {
+        // In-place update: zero reload, zero scroll jump!
+        setWords((prev) => prev.map((w) => (w.id === wordId ? { ...w, ...updatedWord } : w)));
+        setSets((prev) =>
+          prev.map((s) => ({
+            ...s,
+            words: (s.words || []).map((w) => (w.id === wordId ? { ...w, ...updatedWord } : w)),
+          }))
+        );
+      }
       toast.success(`Updated "${wordText}": ${data.word?.meaning || 'enriched'}`);
-      await fetchWords(true);
-      await fetchSets(true);
+      await fetchWords(true, true);
+      await fetchSets(true, true);
     } catch {
       toast.dismiss(toastId);
       toast.error(`Failed to recheck "${wordText}"`);
@@ -474,9 +598,24 @@ export default function VocabularyPage() {
         toast.error(data.error || `Failed to recheck set "${setName}"`);
         return;
       }
+      const newWordsList: UserWord[] = data.words || [];
+      if (newWordsList.length > 0) {
+        const wordMap = new Map(newWordsList.map((w) => [w.id, w]));
+        setSets((prev) =>
+          prev.map((s) =>
+            s.id === setId
+              ? {
+                  ...s,
+                  words: (s.words || []).map((w) => wordMap.get(w.id) || w),
+                }
+              : s
+          )
+        );
+        setWords((prev) => prev.map((w) => wordMap.get(w.id) || w));
+      }
       toast.success(`Rechecked ${data.count ?? 'all'} words in "${setName}"!`);
-      await fetchSets(true);
-      await fetchWords(true);
+      await fetchSets(true, true);
+      await fetchWords(true, true);
     } catch {
       toast.dismiss(toastId);
       toast.error(`Failed to recheck set "${setName}"`);
