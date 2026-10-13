@@ -25,6 +25,7 @@ import {
 import { toast } from 'sonner';
 import { sfx } from '@/lib/sounds';
 import { cachedFetch, invalidateCache } from '@/lib/client-cache';
+import { checkWordOnly, matchesMeaning, normalizeGerman } from '@/lib/word-matching';
 
 interface UserWord {
   id: string;
@@ -74,17 +75,7 @@ function stripArticle(word: string): string {
   return word.replace(/^(der|die|das|ein|eine|einen|einem|einer)\s+/i, '').trim();
 }
 
-function matchesMeaning(userInput: string, meaning: string): boolean {
-  const normalized = (s: string) =>
-    s
-      .trim()
-      .toLowerCase()
-      .replace(/[.,;:!?]/g, '');
-  const u = normalized(userInput);
-  const m = normalized(meaning);
-  if (!u) return false;
-  return m.includes(u) || u.includes(m) || m.split(/[,;]/).some((p) => p.trim().toLowerCase().includes(u));
-}
+
 
 function normalizeAnswer(s: string): string {
   return s.trim().toLowerCase().replace(/[.,;:!?]/g, '');
@@ -157,22 +148,7 @@ function checkAnswer(type: QuestionType, userAnswer: string, correctAnswer: stri
   return u === c;
 }
 
-function normalizeGerman(s: string): string {
-  return s.trim().toLowerCase()
-    .replace(/[.,;:!?'"()]/g, '')
-    .replace(/ae/g, 'ä').replace(/oe/g, 'ö').replace(/ue/g, 'ü')
-    .replace(/ss/g, 'ß');
-}
 
-function checkWordOnly(userAnswer: string, correctAnswer: string): boolean {
-  const u = userAnswer.trim().toLowerCase().replace(/[.,;:!?'"()]/g, '');
-  const c = correctAnswer.trim().toLowerCase().replace(/[.,;:!?'"()]/g, '');
-  if (!u) return false;
-  if (u === c) return true;
-  if (normalizeGerman(userAnswer) === normalizeGerman(correctAnswer)) return true;
-  const cParts = c.split(/[,;/]/).map(p => p.trim());
-  return cParts.some(p => p === u || normalizeGerman(p) === normalizeGerman(userAnswer));
-}
 
 type WordOnlyDirection = 'de_to_en' | 'en_to_de' | 'both';
 

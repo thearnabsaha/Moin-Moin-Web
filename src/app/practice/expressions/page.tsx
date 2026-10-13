@@ -23,6 +23,7 @@ import {
 import { toast } from 'sonner';
 import { sfx } from '@/lib/sounds';
 import { cachedFetch, invalidateCache } from '@/lib/client-cache';
+import { checkWordOnly, matchesMeaning, normalizeGerman } from '@/lib/word-matching';
 
 interface UserExpression {
   id: string;
@@ -54,13 +55,7 @@ type FlowMode = 'list' | 'learn' | 'practice' | 'exam' | 'select_exprs' | 'filte
 type QuestionType = 'meaning' | 'fill_blank';
 type DirectionFilter = 'de_to_en' | 'en_to_de' | 'both';
 
-function matchesMeaning(userInput: string, meaning: string): boolean {
-  const normalized = (s: string) => s.trim().toLowerCase().replace(/[.,;:!?]/g, '');
-  const u = normalized(userInput);
-  const m = normalized(meaning);
-  if (!u) return false;
-  return m.includes(u) || u.includes(m) || m.split(/[,;]/).some((p) => p.trim().toLowerCase().includes(u));
-}
+
 
 function normalizeAnswer(s: string): string {
   return s.trim().toLowerCase().replace(/[.,;:!?]/g, '');
@@ -93,22 +88,7 @@ function checkAnswer(type: QuestionType, userAnswer: string, correctAnswer: stri
   return normalizeAnswer(userAnswer) === normalizeAnswer(correctAnswer);
 }
 
-function normalizeGerman(s: string): string {
-  return s.trim().toLowerCase()
-    .replace(/[.,;:!?'"()]/g, '')
-    .replace(/ae/g, 'ä').replace(/oe/g, 'ö').replace(/ue/g, 'ü')
-    .replace(/ss/g, 'ß');
-}
-
-function checkExprOnly(userAnswer: string, correctAnswer: string): boolean {
-  const u = userAnswer.trim().toLowerCase().replace(/[.,;:!?'"()]/g, '');
-  const c = correctAnswer.trim().toLowerCase().replace(/[.,;:!?'"()]/g, '');
-  if (!u) return false;
-  if (u === c) return true;
-  if (normalizeGerman(userAnswer) === normalizeGerman(correctAnswer)) return true;
-  const cParts = c.split(/[,;/]/).map(p => p.trim());
-  return cParts.some(p => p === u || normalizeGerman(p) === normalizeGerman(userAnswer));
-}
+const checkExprOnly = checkWordOnly;
 
 type ExprOnlyDirection = 'de_to_en' | 'en_to_de' | 'both';
 

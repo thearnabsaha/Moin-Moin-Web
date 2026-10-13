@@ -20,6 +20,7 @@ import {
 } from 'lucide-react';
 import { sfx } from '@/lib/sounds';
 import { cn } from '@/lib/utils';
+import { matchesMeaning } from '@/lib/word-matching';
 
 type PracticeMode = 'flashcard' | 'meaning' | 'gender' | null;
 
@@ -73,17 +74,7 @@ function stripArticle(word: string): string {
   return word.replace(/^(der|die|das|ein|eine|einen|einem|einer)\s+/i, '').trim();
 }
 
-function matchesMeaning(userInput: string, meaning: string): boolean {
-  const normalized = (s: string) =>
-    s
-      .trim()
-      .toLowerCase()
-      .replace(/[.,;:!?]/g, '');
-  const u = normalized(userInput);
-  const m = normalized(meaning);
-  if (!u) return false;
-  return m.includes(u) || u.includes(m) || m.split(/[,;]/).some((p) => p.trim().toLowerCase().includes(u));
-}
+
 
 export default function PracticePage() {
   const [mode, setMode] = useState<PracticeMode>(null);
