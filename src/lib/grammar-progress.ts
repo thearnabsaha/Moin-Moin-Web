@@ -178,6 +178,53 @@ export function resetGrammarProgress(): void {
   } catch {}
 }
 
+/** Synchronize local grammar progress with cloud database (bidirectional merge) */
+export async function syncGrammarProgressWithCloud(): Promise<{
+  success: boolean;
+  progress: GrammarProgress;
+  practice: PracticeProgress;
+  completedChapterCount: number;
+}> {
+  const localProgress = loadGrammarProgress();
+  const localPractice = loadPracticeProgress();
+
+  try {
+    const res = await fetch('/api/grammar/sync', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        progress: localProgress,
+        practice: localPractice,
+      }),
+    });
+
+    if (res.ok) {
+      const data = await res.json();
+      if (data.success && data.progress && data.practice) {
+        saveGrammarProgress(data.progress);
+        savePracticeProgress(data.practice);
+        return {
+          success: true,
+          progress: data.progress,
+          practice: data.practice,
+          completedChapterCount: data.completedChapterCount || 0,
+        };
+      }
+    }
+  } catch (err) {
+    console.warn('[GrammarSync] Cloud sync error:', err);
+  }
+
+  return {
+    success: false,
+    progress: localProgress,
+    practice: localPractice,
+    completedChapterCount: Object.values(localProgress.chapters).filter(
+      (c) => c.completedAt != null
+    ).length,
+  };
+}
+
 /** Derived stats used across Grammar and Dashboard */
 export function computeGrammarStats(p: GrammarProgress, pp?: PracticeProgress) {
   const total = ALL_GRAMMAR_CHAPTERS.length;

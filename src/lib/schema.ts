@@ -106,6 +106,16 @@ export const grammarAttempts = pgTable('grammar_attempts', {
   userTopicIdx: index('grammar_attempts_user_topic_idx').on(t.userId, t.topicId),
 }));
 
+export const userGrammarProgress = pgTable('user_grammar_progress', {
+  id: text('id').primaryKey().$defaultFn(() => createId()),
+  userId: text('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  progress: jsonb('progress').$type<Record<string, unknown>>().notNull().default({}),
+  practice: jsonb('practice').$type<Record<string, unknown>>().notNull().default({}),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+}, (t) => ({
+  userGrammarIdx: uniqueIndex('user_grammar_progress_user_uniq').on(t.userId),
+}));
+
 // ── CONVERSATIONS ────────────────────────────────────────────
 
 export const conversationSessions = pgTable('conversation_sessions', {

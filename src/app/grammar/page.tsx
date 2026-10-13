@@ -22,7 +22,10 @@ import {
   Star,
   Flame,
   Filter,
+  RefreshCw,
+  Smartphone,
 } from 'lucide-react';
+import { toast } from 'sonner';
 import {
   ALL_GRAMMAR_CHAPTERS,
   GRAMMAR_CHAPTERS_BY_LEVEL,
@@ -33,6 +36,7 @@ import {
   loadPracticeProgress,
   toggleChapterComplete,
   computeGrammarStats,
+  syncGrammarProgressWithCloud,
   type GrammarProgress,
   type PracticeProgress,
 } from '@/lib/grammar-progress';
@@ -65,11 +69,44 @@ export default function GrammarPage() {
   const [grammarProgress, setGrammarProgress] = useState<GrammarProgress>({ chapters: {} });
   const [practiceProgress, setPracticeProgress] = useState<PracticeProgress>({ chapters: {} });
   const [mounted, setMounted] = useState(false);
+  const [syncing, setSyncing] = useState(false);
+  const [lastSyncedTime, setLastSyncedTime] = useState<string | null>(null);
+
+  const handleSyncGrammar = async () => {
+    setSyncing(true);
+    const toastId = toast.loading('Syncing grammar with phone & cloud...');
+    try {
+      const res = await syncGrammarProgressWithCloud();
+      toast.dismiss(toastId);
+      if (res.success) {
+        setGrammarProgress(res.progress);
+        setPracticeProgress(res.practice);
+        const timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        setLastSyncedTime(timeStr);
+        toast.success(`Grammar synchronized! ${res.completedChapterCount} chapters in sync across devices.`);
+      } else {
+        toast.info('Local grammar progress is up to date.');
+      }
+    } catch {
+      toast.dismiss(toastId);
+      toast.error('Failed to sync grammar progress');
+    } finally {
+      setSyncing(false);
+    }
+  };
 
   useEffect(() => {
     setGrammarProgress(loadGrammarProgress());
     setPracticeProgress(loadPracticeProgress());
     setMounted(true);
+
+    syncGrammarProgressWithCloud().then((res) => {
+      if (res.success) {
+        setGrammarProgress(res.progress);
+        setPracticeProgress(res.practice);
+        setLastSyncedTime(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
+      }
+    }).catch(() => {});
   }, []);
 
   const stats = useMemo(() => {
@@ -117,6 +154,7 @@ export default function GrammarPage() {
     e.stopPropagation();
     toggleChapterComplete(chapterId);
     setGrammarProgress(loadGrammarProgress());
+    syncGrammarProgressWithCloud().catch(() => {});
   };
 
   return (
@@ -124,6 +162,23 @@ export default function GrammarPage() {
       <PageHeader
         title="German Grammar Masterclass"
         subtitle="64 structured chapters from A0 to B1 with clear rules, tables, 10-level practice drills, audio, and AI tutoring."
+        action={
+          <button
+            onClick={handleSyncGrammar}
+            disabled={syncing}
+            className="inline-flex items-center gap-2 rounded-xl border border-[var(--border)] bg-[var(--bg-secondary)] px-3.5 py-2 text-xs font-bold text-[var(--text-primary)] shadow-sm hover:bg-[var(--bg-tertiary)] hover:border-[var(--accent)] transition-all active:scale-95 disabled:opacity-60"
+            title="Synchronize grammar chapters and scores between Web and Phone"
+          >
+            <RefreshCw size={14} className={syncing ? 'animate-spin text-[var(--accent)]' : 'text-[var(--accent)]'} />
+            <span className="hidden sm:inline">Sync with Phone</span>
+            <span className="sm:hidden">Sync</span>
+            {lastSyncedTime && (
+              <span className="hidden md:inline text-[10px] font-normal text-[var(--text-tertiary)]">
+                ({lastSyncedTime})
+              </span>
+            )}
+          </button>
+        }
       />
 
       {/* ─── Hero Overview Bento Grid ─── */}

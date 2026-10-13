@@ -201,6 +201,79 @@ export default function SettingsPage() {
   const [mounted, setMounted] = useState(false);
   const [copiedUsername, setCopiedUsername] = useState(false);
 
+  // ─── Cross-Device Cloud Sync State ───
+  const [fullSyncLoading, setFullSyncLoading] = useState(false);
+  const [lastSyncTime, setLastSyncTime] = useState<string | null>(null);
+  const [syncTelemetry, setSyncTelemetry] = useState<{
+    vocabulary: { wordCount: number; setCount: number };
+    grammar: { completedChapters: number; totalChapters: number };
+  } | null>(null);
+
+  const handleSyncAll = async () => {
+    setFullSyncLoading(true);
+    const toastId = toast.loading('Synchronizing everything (web & phone)...');
+    try {
+      let localGrammar = { chapters: {} };
+      let localPractice = { chapters: {} };
+      if (typeof window !== 'undefined') {
+        try {
+          const rawG = localStorage.getItem('grammar_progress_v1');
+          if (rawG) localGrammar = JSON.parse(rawG);
+          const rawP = localStorage.getItem('grammar_practice_v1');
+          if (rawP) localPractice = JSON.parse(rawP);
+        } catch {}
+      }
+
+      const res = await fetch('/api/sync/all', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          grammarProgress: localGrammar,
+          practiceProgress: localPractice,
+        }),
+      });
+
+      const data = await res.json();
+      toast.dismiss(toastId);
+
+      if (!res.ok) {
+        toast.error(data.error || 'Failed to sync');
+        return;
+      }
+
+      if (data.grammar?.progress && data.grammar?.practice && typeof window !== 'undefined') {
+        localStorage.setItem('grammar_progress_v1', JSON.stringify(data.grammar.progress));
+        localStorage.setItem('grammar_practice_v1', JSON.stringify(data.grammar.practice));
+      }
+
+      if (data.user) {
+        setUsername(data.user.username || 'learner');
+        setName(data.user.name || 'Learner');
+        setTargetLevel(data.user.targetLevel || 'A1');
+        setDailyGoal(data.user.dailyGoal ?? 20);
+        setSoundEnabled(data.user.soundEnabled ?? true);
+        setMuted(!(data.user.soundEnabled ?? true));
+      }
+
+      setSyncTelemetry({
+        vocabulary: data.vocabulary,
+        grammar: {
+          completedChapters: data.grammar.completedChapters,
+          totalChapters: data.grammar.totalChapters,
+        },
+      });
+
+      const timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      setLastSyncTime(timeStr);
+      toast.success('Everything synchronized! Web and phone are 100% in sync.');
+    } catch {
+      toast.dismiss(toastId);
+      toast.error('Network error while syncing');
+    } finally {
+      setFullSyncLoading(false);
+    }
+  };
+
   // ─── Password Change State ───
   const [showPasswordChange, setShowPasswordChange] = useState(false);
   const [currentPassword, setCurrentPassword] = useState('');
@@ -281,6 +354,23 @@ export default function SettingsPage() {
   useEffect(() => {
     if (!mounted) return;
     setSoundEnabled(!isMuted());
+
+    // Fetch initial cloud sync status & telemetry silently
+    fetch('/api/sync/all', { method: 'POST', body: JSON.stringify({}) })
+      .then((r) => r.json())
+      .then((data) => {
+        if (data.success) {
+          setSyncTelemetry({
+            vocabulary: data.vocabulary,
+            grammar: {
+              completedChapters: data.grammar.completedChapters,
+              totalChapters: data.grammar.totalChapters,
+            },
+          });
+          setLastSyncTime(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
+        }
+      })
+      .catch(() => {});
   }, [mounted]);
 
   const handleCopyUsername = () => {
@@ -419,20 +509,35 @@ export default function SettingsPage() {
         title="More & Settings"
         subtitle="Manage your credentials, password, learning tracks, and app preferences."
         action={
-          <button
-            onClick={handleSave}
-            disabled={saving}
-            className="btn-duo-primary py-2 px-4 text-xs sm:text-sm font-black flex items-center gap-2 rounded-xl"
-          >
-            {saving ? (
-              <Loader2 size={15} className="animate-spin" />
-            ) : saved ? (
-              <Check size={15} />
-            ) : (
-              <Save size={15} />
-            )}
-            <span>{saved ? 'Saved!' : 'Save'}</span>
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={handleSyncAll}
+              disabled={fullSyncLoading}
+              className="btn-duo-secondary py-2 px-3 sm:px-4 text-xs sm:text-sm font-black flex items-center gap-2 rounded-xl border border-[var(--border)] shadow-sm hover:border-[var(--accent)] transition-all active:scale-95 disabled:opacity-60"
+              title="Synchronize all data across laptop and phone"
+            >
+              <RefreshCw
+                size={15}
+                className={fullSyncLoading ? 'animate-spin text-[var(--accent)]' : 'text-[var(--accent)]'}
+              />
+              <span className="hidden sm:inline">Sync Devices</span>
+              <span className="sm:hidden">Sync</span>
+            </button>
+            <button
+              onClick={handleSave}
+              disabled={saving}
+              className="btn-duo-primary py-2 px-4 text-xs sm:text-sm font-black flex items-center gap-2 rounded-xl"
+            >
+              {saving ? (
+                <Loader2 size={15} className="animate-spin" />
+              ) : saved ? (
+                <Check size={15} />
+              ) : (
+                <Save size={15} />
+              )}
+              <span>{saved ? 'Saved!' : 'Save'}</span>
+            </button>
+          </div>
         }
       />
 
@@ -489,6 +594,108 @@ export default function SettingsPage() {
       </div>
 
       <div className="mt-8 space-y-8">
+        {/* ═══ 0. CROSS-DEVICE CLOUD SYNCHRONIZATION ═══ */}
+        {(activeSectionTab === 'all' || activeSectionTab === 'account' || activeSectionTab === 'preferences') && (
+          <motion.div
+            initial={{ opacity: 0, y: 14 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.3 }}
+          >
+            <GlassCard hover={false} className="p-5 sm:p-6 relative overflow-hidden border-2 border-[var(--accent)]/30 bg-gradient-to-br from-[var(--bg-secondary)] via-[var(--bg-secondary)] to-[var(--accent)]/5">
+              <div className="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-emerald-500 via-purple-500 to-blue-500" />
+
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <div className="flex items-start sm:items-center gap-3.5">
+                  <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-[var(--accent)]/15 text-[var(--accent)] shadow-sm">
+                    <Smartphone size={24} />
+                  </div>
+                  <div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <h2 className="text-base sm:text-lg font-black text-[var(--text-primary)]">
+                        Cross-Device Cloud Sync
+                      </h2>
+                      <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-500/15 border border-emerald-500/30 px-2.5 py-0.5 text-[11px] font-black text-emerald-600 dark:text-emerald-400">
+                        <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                        Web & Phone Linked
+                      </span>
+                    </div>
+                    <p className="mt-1 text-xs text-[var(--text-tertiary)] max-w-xl leading-relaxed">
+                      Synchronizes everything all together between your laptop and mobile phone: vocabulary sets & words, 64 grammar chapters & exercise scores, daily study goals, and audio preferences.
+                    </p>
+                  </div>
+                </div>
+
+                <button
+                  onClick={handleSyncAll}
+                  disabled={fullSyncLoading}
+                  className="btn-duo-primary shrink-0 flex items-center justify-center gap-2 py-3 px-5 rounded-2xl text-xs sm:text-sm font-black shadow-md hover:shadow-lg transition-all active:scale-95 disabled:opacity-60"
+                >
+                  <RefreshCw
+                    size={16}
+                    className={fullSyncLoading ? 'animate-spin' : ''}
+                  />
+                  <span>{fullSyncLoading ? 'Synchronizing...' : 'Sync Everything Now'}</span>
+                </button>
+              </div>
+
+              {/* Status & Telemetry Grid */}
+              <div className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-4 pt-4 border-t border-[var(--border)]">
+                <div className="rounded-xl bg-[var(--bg-tertiary)]/60 p-3 border border-[var(--border)]/60">
+                  <div className="flex items-center gap-1.5 text-[11px] font-bold text-[var(--text-tertiary)]">
+                    <BookOpen size={13} className="text-blue-500" />
+                    <span>Vocabulary</span>
+                  </div>
+                  <p className="mt-1 text-sm font-extrabold text-[var(--text-primary)]">
+                    {syncTelemetry ? `${syncTelemetry.vocabulary.wordCount} Words` : 'Ready to sync'}
+                  </p>
+                  <p className="text-[10px] text-[var(--text-tertiary)]">
+                    {syncTelemetry ? `${syncTelemetry.vocabulary.setCount} Sets` : 'Sets & Words'}
+                  </p>
+                </div>
+
+                <div className="rounded-xl bg-[var(--bg-tertiary)]/60 p-3 border border-[var(--border)]/60">
+                  <div className="flex items-center gap-1.5 text-[11px] font-bold text-[var(--text-tertiary)]">
+                    <Brain size={13} className="text-purple-500" />
+                    <span>Grammar</span>
+                  </div>
+                  <p className="mt-1 text-sm font-extrabold text-[var(--text-primary)]">
+                    {syncTelemetry ? `${syncTelemetry.grammar.completedChapters} / 64 Done` : '64 Chapters'}
+                  </p>
+                  <p className="text-[10px] text-[var(--text-tertiary)]">
+                    Scores & Drills
+                  </p>
+                </div>
+
+                <div className="rounded-xl bg-[var(--bg-tertiary)]/60 p-3 border border-[var(--border)]/60">
+                  <div className="flex items-center gap-1.5 text-[11px] font-bold text-[var(--text-tertiary)]">
+                    <Target size={13} className="text-emerald-500" />
+                    <span>Daily Goal</span>
+                  </div>
+                  <p className="mt-1 text-sm font-extrabold text-[var(--text-primary)]">
+                    {dailyGoal} Words / Day
+                  </p>
+                  <p className="text-[10px] text-[var(--text-tertiary)]">
+                    Target: {targetLevel}
+                  </p>
+                </div>
+
+                <div className="rounded-xl bg-[var(--bg-tertiary)]/60 p-3 border border-[var(--border)]/60">
+                  <div className="flex items-center gap-1.5 text-[11px] font-bold text-[var(--text-tertiary)]">
+                    <Activity size={13} className="text-amber-500" />
+                    <span>Last Synced</span>
+                  </div>
+                  <p className="mt-1 text-sm font-extrabold text-[var(--text-primary)] truncate">
+                    {lastSyncTime || 'Pending click'}
+                  </p>
+                  <p className="text-[10px] text-emerald-600 dark:text-emerald-400 font-bold flex items-center gap-1">
+                    <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
+                    Cloud Active
+                  </p>
+                </div>
+              </div>
+            </GlassCard>
+          </motion.div>
+        )}
         {/* ═══ 1. EXPLORE & FEATURE DIRECTORY HUB ═══ */}
         {(activeSectionTab === 'all' || activeSectionTab === 'explore') && (
           <motion.div
